@@ -1,0 +1,64 @@
+{
+  "name": "smart-fs-mcp",
+  "version": "1.0.0",
+  "description": "LLM-optimized filesystem MCP tool with safety controls and efficient token usage",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx src/cli/index.ts",
+    "cli:list": "tsx src/cli/index.ts list",
+    "cli:read": "tsx src/cli/index.ts read",
+    "cli:search": "tsx src/cli/index.ts search",
+    "cli:write": "tsx src/cli/index.ts write",
+    "cli:edit": "tsx src/cli/index.ts edit",
+    "cli:move": "tsx src/cli/index.ts move",
+    "cli:test": "tsx src/cli/index.ts test-all",
+    "api:dev": "nodemon --exec tsx src/api/server.ts",
+    "api:build": "tsc && node dist/api/server.js",
+    "api:start": "node dist/api/server.js",
+    "api:test": "jest src/api/**/*.test.ts"
+  },
+  "bin": {
+    "smart-fs-test": "dist/cli/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "filesystem",
+    "llm",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chardet": "^2.0.0",
+    "command-line-args": "^5.2.1",
+    "command-line-usage": "^7.0.1",
+    "chalk": "^5.3.0",
+    "express": "^4.18.0",
+    "swagger-ui-express": "^4.6.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/command-line-args": "^5.2.3",
+    "@types/command-line-usage": "^5.0.4",
+    "@types/express": "^4.17.0",
+    "@types/swagger-ui-express": "^4.1.0",
+    "@types/cors": "^2.8.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "nodemon": "^3.0.0"
+  }
+}
