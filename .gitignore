@@ -15,6 +15,7 @@ build/
 # IDE and editor files
 .vscode/
 .idea/
+.vs/
 *.swp
 *.swo
 *~
@@ -46,3 +47,14 @@ temp/
 # MCP specific
 mcp-config.json
 .mcp/
+
+# Local test files
+test-*.js
+debug-*.js
+*.bat
+*.ps1
+*.sh
+test.txt
+test-init.json
+server-fix.ts
+/.claude/reports
