@@ -9,6 +9,15 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:verbose": "jest --verbose",
+    "test:tools": "jest src/tools/**/*.test.ts",
+    "test:core": "jest src/core/**/*.test.ts",
+    "test:api": "jest src/api/**/*.test.ts",
+    "test:integration": "jest src/__tests__/integration/**/*.test.ts",
+    "test:unit": "jest --testPathIgnorePatterns=integration",
+    "test:ci": "jest --coverage --ci --watchAll=false",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "cli": "tsx src/cli/index.ts",
@@ -21,8 +30,7 @@
     "cli:test": "tsx src/cli/index.ts test-all",
     "api:dev": "nodemon --exec tsx src/api/server.ts",
     "api:build": "tsc && node dist/api/server.js",
-    "api:start": "node dist/api/server.js",
-    "api:test": "jest src/api/**/*.test.ts"
+    "api:start": "node dist/api/server.js"
   },
   "bin": {
     "smart-fs-test": "dist/cli/index.js"
@@ -37,28 +45,30 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "chalk": "^5.3.0",
     "chardet": "^2.0.0",
     "command-line-args": "^5.2.1",
     "command-line-usage": "^7.0.1",
-    "chalk": "^5.3.0",
+    "cors": "^2.8.5",
     "express": "^4.18.0",
-    "swagger-ui-express": "^4.6.0",
-    "cors": "^2.8.5"
+    "swagger-ui-express": "^4.6.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@jest/globals": "^30.0.3",
     "@types/command-line-args": "^5.2.3",
     "@types/command-line-usage": "^5.0.4",
-    "@types/express": "^4.17.0",
-    "@types/swagger-ui-express": "^4.1.0",
     "@types/cors": "^2.8.0",
+    "@types/express": "^4.17.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "@types/swagger-ui-express": "^4.1.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.0.0",
     "jest": "^29.0.0",
+    "nodemon": "^3.0.0",
     "ts-jest": "^29.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.0.0",
-    "nodemon": "^3.0.0"
+    "typescript": "^5.0.0"
   }
 }

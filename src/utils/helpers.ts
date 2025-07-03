@@ -59,8 +59,8 @@ export function getFileTypeFromExtension(filePath: string): FileType {
   const ext = path.extname(filePath).toLowerCase();
   
   // Check each category
-  for (const [category, config] of Object.entries(FILE_CLASSIFICATION)) {
-    if (config.extensions.includes(ext)) {
+  for (const [_category, config] of Object.entries(FILE_CLASSIFICATION)) {
+    if ((config.extensions as unknown as string[]).includes(ext)) {
       return {
         category: config.category as any,
         specificType: ext.substring(1), // Remove the dot
@@ -132,7 +132,7 @@ export function isBinaryContent(buffer: Buffer, bytesToCheck: number = 8192): bo
     }
     
     // Count non-printable characters (excluding common whitespace)
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
+    if (byte !== undefined && byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
       nonPrintableCount++;
     }
   }
@@ -201,20 +201,14 @@ export async function batchProcess<T, R>(
 /**
  * Safe file stats wrapper
  */
-export async function safeFileStats(filePath: string): Promise<OperationResult<fs.Stats>> {
+export async function safeFileStats(filePath: string): Promise<OperationResult<any>> {
   try {
     const stats = await fs.stat(filePath);
-    return { success: true, data: stats };
+    return { status: 'success', data: stats };
   } catch (error) {
     return {
-      success: false,
-      error: {
-        type: 'FILE_NOT_FOUND',
-        message: `Cannot access file: ${filePath}`,
-        filePath,
-        attemptedOperation: 'stat',
-        originalError: error as Error
-      }
+      status: 'error',
+      error: `Cannot access file: ${filePath}`
     };
   }
 }
@@ -307,18 +301,13 @@ export function deepFreeze<T extends object>(obj: T): Readonly<T> {
  * Create error response object
  */
 export function createErrorResponse(
-  type: string,
+  _type: string,
   message: string,
-  details?: Record<string, any>
+  _details?: Record<string, any>
 ): OperationResult<never> {
   return {
-    success: false,
-    error: {
-      type: type as any,
-      message,
-      attemptedOperation: details?.operation || 'unknown',
-      ...details
-    }
+    status: 'error',
+    error: message
   };
 }
 

@@ -76,13 +76,50 @@ browser testing via SwaggerUI and CURL-based testing for development.
       get: {
         tags: ['System'],
         summary: 'Health check',
-        description: 'Check if the API server is running properly',
+        description: 'Check if the API server is running properly with system metrics',
         responses: {
           '200': {
             description: 'Server is healthy',
             content: {
               'application/json': {
-                schema: { $ref: '#/components/schemas/SuccessResponse' }
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: {
+                      type: 'string',
+                      enum: ['healthy'],
+                      description: 'Server health status'
+                    },
+                    timestamp: {
+                      type: 'string',
+                      format: 'date-time',
+                      description: 'Current server time'
+                    },
+                    version: {
+                      type: 'string',
+                      description: 'API version'
+                    },
+                    uptime: {
+                      type: 'number',
+                      description: 'Server uptime in seconds'
+                    },
+                    memory: {
+                      type: 'object',
+                      properties: {
+                        used_mb: {
+                          type: 'number',
+                          description: 'Memory used in megabytes'
+                        },
+                        total_mb: {
+                          type: 'number',
+                          description: 'Total memory allocated in megabytes'
+                        }
+                      },
+                      required: ['used_mb', 'total_mb']
+                    }
+                  },
+                  required: ['status', 'timestamp', 'version', 'uptime', 'memory']
+                }
               }
             }
           }
@@ -99,7 +136,57 @@ browser testing via SwaggerUI and CURL-based testing for development.
             description: 'API information',
             content: {
               'application/json': {
-                schema: { $ref: '#/components/schemas/SuccessResponse' }
+                schema: {
+                  type: 'object',
+                  properties: {
+                    name: {
+                      type: 'string',
+                      description: 'API name'
+                    },
+                    version: {
+                      type: 'string',
+                      description: 'API version'
+                    },
+                    description: {
+                      type: 'string',
+                      description: 'API description'
+                    },
+                    endpoints: {
+                      type: 'object',
+                      properties: {
+                        files: {
+                          type: 'object',
+                          description: 'File operation endpoints',
+                          additionalProperties: { type: 'string' }
+                        },
+                        directories: {
+                          type: 'object',
+                          description: 'Directory operation endpoints',
+                          additionalProperties: { type: 'string' }
+                        },
+                        search: {
+                          type: 'object',
+                          description: 'Search operation endpoints',
+                          additionalProperties: { type: 'string' }
+                        }
+                      },
+                      required: ['files', 'directories', 'search']
+                    },
+                    documentation: {
+                      type: 'string',
+                      description: 'Documentation URL'
+                    },
+                    health_check: {
+                      type: 'string',
+                      description: 'Health check endpoint'
+                    },
+                    openapi_spec: {
+                      type: 'string',
+                      description: 'OpenAPI specification URL'
+                    }
+                  },
+                  required: ['name', 'version', 'description', 'endpoints', 'documentation', 'health_check', 'openapi_spec']
+                }
               }
             }
           }
@@ -109,16 +196,10 @@ browser testing via SwaggerUI and CURL-based testing for development.
     '/api/files/info': {
       get: {
         tags: ['Files'],
-        summary: 'Get file information',
-        description: 'Retrieve detailed metadata about a file or directory',
+        summary: 'Get file information (LLM-optimized)',
+        description: 'Retrieve detailed metadata about a file or directory with LLM-optimized response format (data at top level)',
         parameters: [
-          {
-            name: 'path',
-            in: 'query',
-            required: true,
-            description: 'File or directory path',
-            schema: { type: 'string', example: './package.json' }
-          },
+          { $ref: '#/components/parameters/AbsolutePath' },
           {
             name: 'include_analysis',
             in: 'query',
@@ -132,28 +213,203 @@ browser testing via SwaggerUI and CURL-based testing for development.
             description: 'File information retrieved',
             content: {
               'application/json': {
-                schema: { $ref: '#/components/schemas/SuccessResponse' }
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      title: 'Success Response (LLM-optimized)',
+                      required: ['success', 'path', 'resolved_path', 'exists', 'type', 'size', 'created', 'modified', 'accessed', 'permissions'],
+                      properties: {
+                        success: { type: 'boolean', const: true },
+                        path: { type: 'string', description: 'File path' },
+                        resolved_path: { type: 'string', description: 'Resolved absolute path' },
+                        exists: { type: 'boolean', description: 'Whether file exists' },
+                        type: { type: 'string', enum: ['file', 'directory', 'symlink', 'other'], description: 'File type' },
+                        size: { type: 'number', description: 'File size in bytes' },
+                        created: { type: 'string', format: 'date-time', description: 'Creation time' },
+                        modified: { type: 'string', format: 'date-time', description: 'Last modified time' },
+                        accessed: { type: 'string', format: 'date-time', description: 'Last accessed time' },
+                        permissions: {
+                          type: 'object',
+                          properties: {
+                            readable: { type: 'boolean' },
+                            writable: { type: 'boolean' },
+                            executable: { type: 'boolean' },
+                            mode: { type: 'string', pattern: '^[0-7]{4}$' }
+                          }
+                        },
+                        file_analysis: {
+                          type: 'object',
+                          description: 'Detailed file analysis (if include_analysis=true)',
+                          properties: {
+                            is_binary: { type: 'boolean' },
+                            encoding: { type: 'string' },
+                            estimated_tokens: { type: 'number' },
+                            file_type: { type: 'string', enum: ['text', 'code', 'config', 'data', 'binary'] },
+                            syntax_language: { type: 'string' },
+                            line_count: { type: 'number' },
+                            char_count: { type: 'number' },
+                            safe_to_read: { type: 'boolean' }
+                          }
+                        },
+                        directory_info: {
+                          type: 'object',
+                          description: 'Directory information (if target is directory)',
+                          properties: {
+                            file_count: { type: 'number' },
+                            subdirectory_count: { type: 'number' },
+                            total_size_estimate: { type: 'number' }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      type: 'object',
+                      title: 'Failure Response',
+                      required: ['success', 'failedInfo'],
+                      properties: {
+                        success: { type: 'boolean', const: false },
+                        failedInfo: {
+                          type: 'object',
+                          required: ['reason', 'message', 'solutions'],
+                          properties: {
+                            reason: {
+                              type: 'string',
+                              enum: ['path_not_absolute', 'not_found', 'permission_denied', 'analysis_failed']
+                            },
+                            message: { type: 'string' },
+                            solutions: {
+                              type: 'array',
+                              items: { $ref: '#/components/schemas/Solution' }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                examples: {
+                  file_info: {
+                    summary: 'ファイル情報取得成功 (LLM-optimized)',
+                    value: {
+                      success: true,
+                      path: '/home/user/project/package.json',
+                      resolved_path: '/home/user/project/package.json',
+                      exists: true,
+                      type: 'file',
+                      size: 2290,
+                      created: '2024-01-01T00:00:00Z',
+                      modified: '2024-01-15T10:30:00Z',
+                      accessed: '2024-01-15T12:00:00Z',
+                      permissions: {
+                        readable: true,
+                        writable: true,
+                          executable: false,
+                          mode: '0644'
+                        },
+                        file_analysis: {
+                          is_binary: false,
+                          encoding: 'utf8',
+                          estimated_tokens: 450,
+                          file_type: 'config',
+                          syntax_language: 'json',
+                          line_count: 85,
+                          char_count: 2290,
+                          safe_to_read: true
+                        }
+                      }
+                  },
+                  directory_info: {
+                    summary: 'ディレクトリ情報取得成功 (LLM-optimized)',
+                    value: {
+                      success: true,
+                      path: '/home/user/project/src',
+                      resolved_path: '/home/user/project/src',
+                      exists: true,
+                      type: 'directory',
+                      size: 0,
+                      created: '2024-01-01T00:00:00Z',
+                      modified: '2024-01-15T09:00:00Z',
+                      accessed: '2024-01-15T12:00:00Z',
+                      permissions: {
+                        readable: true,
+                        writable: true,
+                        executable: true,
+                        mode: '0755'
+                      },
+                      directory_info: {
+                        file_count: 25,
+                        subdirectory_count: 5,
+                        total_size_estimate: 156789
+                      }
+                    }
+                  },
+                  not_found: {
+                    summary: 'ファイルが見つからない',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'not_found',
+                        message: 'ファイルまたはディレクトリが見つかりません',
+                        solutions: [
+                          {
+                            method: 'list_directory',
+                            params: { path: '/home/user/project' },
+                            description: '親ディレクトリの内容を確認'
+                          },
+                          {
+                            method: 'search_content',
+                            params: {
+                              file_pattern: 'missing.txt',
+                              directory: '/home/user/project'
+                            },
+                            description: '類似名のファイルを検索'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
               }
             }
           },
           '404': { $ref: '#/components/responses/NotFound' },
           '403': { $ref: '#/components/responses/Forbidden' },
-          '400': { $ref: '#/components/responses/BadRequest' }
+          '400': { $ref: '#/components/responses/PathValidationError' }
         }
       }
     },
     '/api/files/content': {
       get: {
         tags: ['Files'],
-        summary: 'Read file content',
-        description: 'Read file content with automatic safety checks and limits',
+        summary: 'Read file content with unified force parameter (LLM cognitive load reduction)',
+        description: `ファイル内容を読み取ります。LLMの認知的負荷軽減のため単一エンドポイントで統一：
+
+**通常モード (force=false)**
+- サイズ制限: 20KB以下
+- 制限内なら内容を返す
+- サイズ超過時は詳細情報 + force=true での再実行提案
+
+**強制モード (force=true)**  
+- サイズ制限: 256KB以下（環境変数で制御）
+- 制限を無視して読み取り
+- 成功時は警告付きレスポンス
+
+**自動ワークフロー**
+1. 通常読み取り試行
+2. サイズ超過時は詳細情報表示
+3. LLMが force=true で再実行`,
         parameters: [
+          { $ref: '#/components/parameters/AbsolutePath' },
           {
-            name: 'path',
+            name: 'force',
             in: 'query',
-            required: true,
-            description: 'File path to read',
-            schema: { type: 'string', example: './README.md' }
+            required: false,
+            description: 'サイズ制限を無視して強制読み取り（最大256KB、環境変数で制御）',
+            schema: {
+              type: 'boolean',
+              default: false
+            }
           },
           {
             name: 'encoding',
@@ -165,14 +421,80 @@ browser testing via SwaggerUI and CURL-based testing for development.
               enum: ['utf8', 'utf16le', 'utf16be', 'latin1', 'ascii'],
               default: 'utf8'
             }
-          }
+          },
         ],
         responses: {
           '200': {
             description: 'File content or safety information',
             content: {
               'application/json': {
-                schema: { $ref: '#/components/schemas/SuccessResponse' }
+                schema: {
+                  $ref: '#/components/schemas/ReadFileResponse'
+                },
+                examples: {
+                  success: {
+                    summary: '読み取り成功',
+                    value: {
+                      success: true,
+                      content: "console.log('Hello World!');"
+                    }
+                  },
+                  size_exceeded: {
+                    summary: 'サイズ超過（force=trueで解決）',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'size_exceeded',
+                        message: 'ファイルサイズ（150 KB）が制限（20 KB）を超えています',
+                        file_info: {
+                          size_kb: 150,
+                          estimated_tokens: 3750,
+                          file_type: 'code',
+                          is_binary: false
+                        },
+                        preview: {
+                          first_lines: [
+                            "import React from 'react';",
+                            "import { useState, useEffect } from 'react';"
+                          ],
+                          summary: 'React TypeScript component'
+                        },
+                        solutions: [
+                          {
+                            method: 'read_file',
+                            params: {
+                              path: 'C:/Users/info/source/smart-fs-mcp/medium-component.tsx',
+                              force: true
+                            },
+                            description: '制限を無視して強制読み取り（上限: 256KB）',
+                            priority: 'high'
+                          },
+                          {
+                            method: 'search_content',
+                            params: {
+                              file_pattern: 'medium-component.tsx',
+                              content_pattern: 'export.*|function.*|const.*='
+                            },
+                            description: '特定の関数やエクスポートのみ検索',
+                            priority: 'medium'
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  force_read_success: {
+                    summary: '強制読み取り成功（警告付き）',
+                    value: {
+                      success: true,
+                      content: "import React from 'react';\n// ... 150KB of component code ...",
+                      warning: {
+                        message: '中程度ファイル（150 KB）を強制読み取りしました',
+                        size_kb: 150,
+                        estimated_tokens: 3750
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -193,11 +515,7 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 type: 'object',
                 required: ['path', 'content'],
                 properties: {
-                  path: {
-                    type: 'string',
-                    description: 'File path to write',
-                    example: './test.txt'
-                  },
+                  path: { $ref: '#/components/schemas/AbsolutePathProperty' },
                   content: {
                     type: 'string',
                     description: 'Content to write',
@@ -227,48 +545,25 @@ browser testing via SwaggerUI and CURL-based testing for development.
         }
       }
     },
-    '/api/files/content/force': {
-      get: {
-        tags: ['Files'],
-        summary: 'Force read file content',
-        description: 'Read file content bypassing normal size limits (use with caution)',
-        parameters: [
-          {
-            name: 'path',
-            in: 'query',
-            required: true,
-            description: 'File path to read',
-            schema: { type: 'string' }
-          },
-          {
-            name: 'max_size_mb',
-            in: 'query',
-            required: false,
-            description: 'Maximum file size in MB',
-            schema: { type: 'number', minimum: 1, maximum: 100, default: 50 }
-          },
-          {
-            name: 'encoding',
-            in: 'query',
-            required: false,
-            schema: { 
-              type: 'string', 
-              enum: ['utf8', 'utf16le', 'utf16be', 'latin1', 'ascii']
-            }
-          }
-        ],
-        responses: {
-          '200': { $ref: '#/components/responses/Success' },
-          '404': { $ref: '#/components/responses/NotFound' },
-          '413': { $ref: '#/components/responses/PayloadTooLarge' }
-        }
-      }
-    },
+    // '/api/files/content/force' endpoint removed - unified into /api/files/content with force parameter
     '/api/files/edit': {
       put: {
         tags: ['Files'],
         summary: 'Edit file content',
-        description: 'Edit file using literal or regex replacements with optional preview',
+        description: `Smart file editing with two approaches:
+
+**Simple Replacement (Recommended for 90% of cases)**
+- Use oldText/newText for exact string matches
+- Safer and more predictable
+- Ideal for configuration changes
+
+**Regex Replacement (Advanced)**
+- Use type="regex" with pattern/replacement
+- Powerful for multiple similar patterns
+- Requires regex knowledge
+
+**Best Practice:**
+Start with simple replacement. Use regex only when multiple patterns need unified changes.`,
         requestBody: {
           required: true,
           content: {
@@ -277,27 +572,64 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 type: 'object',
                 required: ['path', 'edits'],
                 properties: {
-                  path: { type: 'string', example: './config.js' },
+                  path: { $ref: '#/components/schemas/AbsolutePathProperty' },
                   edits: {
                     type: 'array',
+                    description: 'Array of edit operations',
                     items: {
                       oneOf: [
                         {
                           type: 'object',
+                          title: 'Simple Text Replacement',
+                          description: 'シンプルな文字列置換（推奨方式）',
                           properties: {
-                            oldText: { type: 'string' },
-                            newText: { type: 'string' }
-                          }
+                            oldText: { 
+                              type: 'string',
+                              description: '置換対象の文字列（完全一致）',
+                              example: 'const PORT = 3000'
+                            },
+                            newText: { 
+                              type: 'string',
+                              description: '置換後の文字列',
+                              example: 'const PORT = 8080'
+                            }
+                          },
+                          required: ['oldText', 'newText']
                         },
                         {
                           type: 'object',
+                          title: 'Regex Pattern Replacement',
+                          description: '正規表現による高度な置換（複数パターン一括処理用）',
                           properties: {
-                            type: { type: 'string', enum: ['literal', 'regex'] },
-                            old_text: { type: 'string' },
-                            new_text: { type: 'string' },
-                            pattern: { type: 'string' },
-                            replacement: { type: 'string' },
-                            flags: { type: 'string' }
+                            type: { 
+                              type: 'string', 
+                              enum: ['literal', 'regex'],
+                              description: '編集タイプ（regex指定）'
+                            },
+                            old_text: { 
+                              type: 'string',
+                              description: 'リテラル置換用の古いテキスト'
+                            },
+                            new_text: { 
+                              type: 'string',
+                              description: 'リテラル置換用の新しいテキスト'
+                            },
+                            pattern: { 
+                              type: 'string',
+                              description: '正規表現パターン',
+                              example: 'const\\s+user\\d+\\s*='
+                            },
+                            replacement: { 
+                              type: 'string',
+                              description: '置換文字列（$1, $2等のキャプチャ使用可能）',
+                              example: 'const user ='
+                            },
+                            flags: { 
+                              type: 'string',
+                              default: 'g',
+                              description: '正規表現フラグ',
+                              example: 'gi'
+                            }
                           }
                         }
                       ]
@@ -305,6 +637,51 @@ browser testing via SwaggerUI and CURL-based testing for development.
                   },
                   dry_run: { type: 'boolean', default: false },
                   preserve_formatting: { type: 'boolean', default: true }
+                }
+              },
+              examples: {
+                simple_replacement: {
+                  summary: 'シンプル置換（90%のケース）',
+                  description: '単純な文字列置換',
+                  value: {
+                    path: './config.js',
+                    edits: [
+                      { oldText: 'PORT = 3000', newText: 'PORT = 8080' },
+                      { oldText: 'localhost', newText: '0.0.0.0' }
+                    ]
+                  }
+                },
+                regex_replacement: {
+                  summary: '正規表現置換（複数パターン統一）',
+                  description: '類似パターンの一括置換',
+                  value: {
+                    path: './models.js',
+                    edits: [
+                      {
+                        type: 'regex',
+                        pattern: 'const\\s+(user|admin|guest)\\d+\\s*=',
+                        replacement: 'const $1 =',
+                        flags: 'g'
+                      }
+                    ]
+                  }
+                },
+                mixed_edits: {
+                  summary: '混合編集（シンプル + 正規表現）',
+                  description: '状況に応じた編集方式の使い分け',
+                  value: {
+                    path: './app.js',
+                    edits: [
+                      { oldText: '// TODO: implement', newText: '// DONE: implemented' },
+                      {
+                        type: 'regex',
+                        pattern: '\\s*console\\.log\\([^)]*\\);?',
+                        replacement: '',
+                        flags: 'g'
+                      }
+                    ],
+                    dry_run: true
+                  }
                 }
               }
             }
@@ -329,8 +706,8 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 type: 'object',
                 required: ['source', 'destination'],
                 properties: {
-                  source: { type: 'string', example: './old-name.txt' },
-                  destination: { type: 'string', example: './new-name.txt' },
+                  source: { $ref: '#/components/schemas/AbsolutePathProperty' },
+                  destination: { $ref: '#/components/schemas/AbsolutePathProperty' },
                   overwrite_existing: { type: 'boolean', default: false }
                 }
               }
@@ -347,16 +724,21 @@ browser testing via SwaggerUI and CURL-based testing for development.
     '/api/files': {
       delete: {
         tags: ['Files'],
-        summary: 'Delete file',
-        description: 'Delete a file with safety checks and importance assessment',
+        summary: 'Delete file (LLM-optimized)',
+        description: `
+**BREAKING CHANGE**: Now requires absolute paths and returns unified response format.
+
+Features:
+- **Absolute paths required**: Relative paths will be rejected
+- **Unified response**: Simple success or detailed failure with solutions
+- **7 failure patterns**: not_found, permission_denied, in_use, read_only, invalid_target, path_not_absolute, unknown_error
+- **Force option**: Override read-only protection
+- **Actionable solutions**: Every failure includes ready-to-use API calls
+
+Use this for safe file deletion with clear error handling.
+        `,
         parameters: [
-          {
-            name: 'path',
-            in: 'query',
-            required: true,
-            description: 'File path to delete',
-            schema: { type: 'string' }
-          },
+          { $ref: '#/components/parameters/AbsolutePath' },
           {
             name: 'force',
             in: 'query',
@@ -366,45 +748,485 @@ browser testing via SwaggerUI and CURL-based testing for development.
           }
         ],
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
-          '404': { $ref: '#/components/responses/NotFound' },
-          '403': { $ref: '#/components/responses/Forbidden' }
+          '200': {
+            description: 'File deletion result',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      title: 'Success Response',
+                      required: ['success'],
+                      properties: {
+                        success: { type: 'boolean', const: true }
+                      }
+                    },
+                    {
+                      type: 'object',
+                      title: 'Failure Response',
+                      required: ['success', 'failedInfo'],
+                      properties: {
+                        success: { type: 'boolean', const: false },
+                        failedInfo: {
+                          type: 'object',
+                          required: ['reason', 'message', 'solutions'],
+                          properties: {
+                            reason: { 
+                              type: 'string',
+                              enum: ['not_found', 'permission_denied', 'in_use', 'read_only', 'invalid_target', 'unknown_error']
+                            },
+                            message: { type: 'string' },
+                            target_info: {
+                              type: 'object',
+                              properties: {
+                                path: { type: 'string' },
+                                type: { type: 'string', enum: ['file', 'directory'] },
+                                exists: { type: 'boolean' }
+                              }
+                            },
+                            solutions: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  method: { type: 'string' },
+                                  params: { type: 'object' },
+                                  description: { type: 'string' }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                examples: {
+                  success: {
+                    summary: '削除成功',
+                    value: {
+                      success: true
+                    }
+                  },
+                  not_found: {
+                    summary: 'ファイルが見つからない',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'not_found',
+                        message: 'ファイルが見つかりません: /path/to/missing.txt',
+                        target_info: {
+                          path: '/path/to/missing.txt',
+                          type: 'file',
+                          exists: false
+                        },
+                        solutions: [
+                          {
+                            method: 'list_directory',
+                            params: { path: '/path/to' },
+                            description: '親ディレクトリの内容を確認'
+                          },
+                          {
+                            method: 'search_content',
+                            params: { 
+                              file_pattern: 'missing',
+                              directory: '/path/to'
+                            },
+                            description: '類似ファイル名を検索'
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  read_only: {
+                    summary: '読み取り専用ファイル',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'read_only',
+                        message: 'ファイルは読み取り専用です: /path/to/readonly.txt',
+                        target_info: {
+                          path: '/path/to/readonly.txt',
+                          type: 'file',
+                          exists: true
+                        },
+                        solutions: [
+                          {
+                            method: 'delete_file',
+                            params: { 
+                              path: '/path/to/readonly.txt',
+                              force: true
+                            },
+                            description: '強制削除（読み取り専用属性を解除して削除）'
+                          },
+                          {
+                            method: 'file_info',
+                            params: { path: '/path/to/readonly.txt' },
+                            description: '属性の詳細を確認'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' }
         }
       }
     },
     '/api/directories/list': {
       get: {
         tags: ['Directories'],
-        summary: 'List directory contents',
+        summary: 'List directory contents (LLM-optimized)',
+        description: `
+**BREAKING CHANGE**: Absolute paths required with cross-platform support.
+
+**Major Improvements:**
+- **Cross-platform paths**: Windows (C:\\path or C:/path) and Unix (/path) supported
+- **Configurable limits**: max_files (1-200), max_directories (1-50)
+- **Hidden file control**: include_hidden parameter (default: true)
+- **Smart error analysis**: File type breakdown and intelligent filtering suggestions
+- **Enhanced metadata**: Hidden status for all entries, excluded counts in summary
+
+**Features:**
+- **Absolute paths required**: Relative paths rejected with helpful current_directory info
+- **File limit**: Default 50 files (configurable up to 200)
+- **Enhanced filtering**: Extensions and exclude_dirs support
+- **Hidden file control**: Set include_hidden=false to reduce cognitive load
+- **Smart failure responses**: Detailed analysis with actionable solutions
+
+Use this for LLM-friendly directory exploration with full control over output.
+        `,
         parameters: [
+          { $ref: '#/components/parameters/AbsolutePath' },
           {
-            name: 'path',
+            name: 'extensions',
             in: 'query',
-            required: true,
-            description: 'Directory path to list',
-            schema: { type: 'string', example: './src' }
+            required: false,
+            description: 'File extensions to include (with or without dots)',
+            schema: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['js', 'ts', '.json']
+            },
+            examples: {
+              javascript_files: {
+                summary: 'JavaScript関連ファイル',
+                value: ['js', 'ts', 'jsx', 'tsx']
+              },
+              config_files: {
+                summary: '設定ファイル',
+                value: ['json', 'yml', 'yaml', 'toml']
+              }
+            }
+          },
+          {
+            name: 'exclude_dirs',
+            in: 'query',
+            required: false,
+            description: 'Directory names to exclude from listing',
+            schema: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['node_modules', '.git', 'dist']
+            },
+            examples: {
+              common_excludes: {
+                summary: '一般的な除外ディレクトリ',
+                value: ['node_modules', '.git', 'dist', 'build', '.next']
+              },
+              development_excludes: {
+                summary: '開発時の除外',
+                value: ['coverage', '.nyc_output', 'tmp']
+              }
+            }
           },
           {
             name: 'include_hidden',
             in: 'query',
             required: false,
-            schema: { type: 'boolean', default: false }
+            description: `隠しファイル・ディレクトリの表示制御
+      
+**デフォルト: true** (常に隠しファイル表示)
+
+- \`true\`: \`.gitignore\`, \`.vscode/\` 等を含む全ファイル表示
+- \`false\`: 隠しファイル除外 (\`.\`で始まるファイル/ディレクトリ)
+
+**LLM認知負荷軽減のため、通常はfalseを推奨**`,
+            schema: {
+              type: 'boolean',
+              default: true
+            }
           },
           {
-            name: 'sort_by',
+            name: 'max_files',
             in: 'query',
             required: false,
-            schema: { type: 'string', enum: ['name', 'size', 'modified'], default: 'name' }
+            description: `表示する最大ファイル数 (LLM認知負荷制御)
+      
+**デフォルト: 50** (LLM最適化)
+**範囲: 1-200**
+
+大量ファイル時は \`extensions\` フィルタと併用推奨`,
+            schema: {
+              type: 'number',
+              minimum: 1,
+              maximum: 200,
+              default: 50
+            }
           },
           {
-            name: 'sort_order',
+            name: 'max_directories',
             in: 'query',
             required: false,
-            schema: { type: 'string', enum: ['asc', 'desc'], default: 'asc' }
+            description: '表示する最大ディレクトリ数',
+            schema: {
+              type: 'number',
+              minimum: 1,
+              maximum: 50,
+              default: 20
+            }
           }
         ],
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
+          '200': {
+            description: 'Directory contents retrieved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      title: 'Success Response',
+                      required: ['success', 'path', 'files', 'directories', 'summary'],
+                      properties: {
+                        success: { type: 'boolean', const: true },
+                        path: { type: 'string', description: 'Directory path' },
+                        files: {
+                          type: 'array',
+                          maxItems: 200,
+                          items: {
+                            type: 'object',
+                            required: ['name', 'size', 'modified', 'hidden'],
+                            properties: {
+                              name: { type: 'string' },
+                              size: { type: 'number', description: 'ファイルサイズ (バイト)' },
+                              ext: { type: 'string', description: '拡張子 (ドットなし)' },
+                              modified: { type: 'string', format: 'date-time' },
+                              hidden: { type: 'boolean', description: '隠しファイルかどうか' }
+                            }
+                          }
+                        },
+                        directories: {
+                          type: 'array',
+                          maxItems: 50,
+                          items: {
+                            type: 'object',
+                            required: ['name', 'files', 'directories', 'modified', 'hidden'],
+                            properties: {
+                              name: { type: 'string' },
+                              files: { type: 'number', description: '含まれるファイル数' },
+                              directories: { type: 'number', description: '含まれるサブディレクトリ数' },
+                              modified: { type: 'string', format: 'date-time' },
+                              hidden: { type: 'boolean', description: '隠しディレクトリかどうか' }
+                            }
+                          }
+                        },
+                        summary: {
+                          type: 'object',
+                          required: ['file_count', 'directory_count', 'total_size', 'limited'],
+                          properties: {
+                            file_count: { type: 'number' },
+                            directory_count: { type: 'number' },
+                            total_size: { type: 'number', description: '総ファイルサイズ (バイト)' },
+                            limited: { type: 'boolean', description: '制限により一部のみ表示' },
+                            additional_files: { type: 'number', description: '制限により非表示のファイル数' },
+                            hidden_excluded: { type: 'number', description: '隠しファイル除外数' }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      type: 'object',
+                      title: 'Failure Response',
+                      required: ['success', 'failedInfo'],
+                      properties: {
+                        success: { type: 'boolean', const: false },
+                        failedInfo: {
+                          type: 'object',
+                          required: ['reason', 'message', 'solutions'],
+                          properties: {
+                            reason: { 
+                              type: 'string',
+                              enum: ['path_not_absolute', 'not_found', 'permission_denied', 'too_many_files', 'invalid_path_format']
+                            },
+                            message: { type: 'string', description: '人間が理解しやすいエラーメッセージ' },
+                            current_directory: { type: 'string', description: '現在の作業ディレクトリ (相対パスエラー時)' },
+                            solutions: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  method: { type: 'string' },
+                                  params: { type: 'object' },
+                                  description: { type: 'string' }
+                                }
+                              },
+                              description: '具体的な解決策 (そのまま実行可能なパラメータ付き)'
+                            },
+                            directory_info: {
+                              type: 'object',
+                              description: 'ディレクトリ情報 (ファイル過多時の簡易情報)',
+                              properties: {
+                                total_files: { type: 'number' },
+                                suggested_filters: { 
+                                  type: 'array',
+                                  items: { type: 'string' }
+                                }
+                              }
+                            },
+                            directory_analysis: {
+                              type: 'object',
+                              description: 'ディレクトリの詳細分析 (ファイル過多時)',
+                              properties: {
+                                total_files: { type: 'number' },
+                                file_types: {
+                                  type: 'array',
+                                  items: {
+                                    type: 'object',
+                                    properties: {
+                                      ext: { type: 'string' },
+                                      count: { type: 'number' },
+                                      percentage: { type: 'number' }
+                                    }
+                                  }
+                                },
+                                hidden_files: { type: 'number' }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                examples: {
+                  success_windows: {
+                    summary: 'Windows成功例',
+                    value: {
+                      success: true,
+                      path: 'C:\\Users\\info\\source\\smart-fs-mcp\\src',
+                      files: [
+                        {
+                          name: 'index.ts',
+                          size: 27030,
+                          ext: 'ts',
+                          modified: '2024-01-15T10:30:00Z',
+                          hidden: false
+                        }
+                      ],
+                      directories: [
+                        {
+                          name: 'tools',
+                          files: 15,
+                          directories: 0,
+                          modified: '2024-01-15T09:15:00Z',
+                          hidden: false
+                        }
+                      ],
+                      summary: {
+                        file_count: 1,
+                        directory_count: 1,
+                        total_size: 27030,
+                        limited: false,
+                        hidden_excluded: 5
+                      }
+                    }
+                  },
+                  too_many_files_smart: {
+                    summary: 'ファイル過多エラー (スマート提案)',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'too_many_files',
+                        message: '325ファイル検出 (制限: 50件)',
+                        directory_analysis: {
+                          total_files: 325,
+                          file_types: [
+                            { ext: 'ts', count: 45, percentage: 14 },
+                            { ext: 'js', count: 38, percentage: 12 },
+                            { ext: 'json', count: 12, percentage: 4 },
+                            { ext: 'md', count: 8, percentage: 2 }
+                          ],
+                          hidden_files: 15
+                        },
+                        solutions: [
+                          {
+                            method: 'list_directory',
+                            params: {
+                              path: 'C:\\Users\\info\\source\\smart-fs-mcp\\src',
+                              extensions: ['ts', 'js'],
+                              max_files: 100
+                            },
+                            description: 'TypeScript/JavaScriptファイルのみ (83件)'
+                          },
+                          {
+                            method: 'list_directory',
+                            params: {
+                              path: 'C:\\Users\\info\\source\\smart-fs-mcp\\src',
+                              include_hidden: false,
+                              max_files: 50
+                            },
+                            description: '隠しファイル除外で50件表示'
+                          },
+                          {
+                            method: 'search_content',
+                            params: {
+                              directory: 'C:\\Users\\info\\source\\smart-fs-mcp\\src',
+                              file_pattern: '.*\\.(ts|js)$'
+                            },
+                            description: '特定ファイルを検索で探す'
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  relative_path_error: {
+                    summary: '相対パスエラー (改善版)',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'path_not_absolute',
+                        message: "絶対パス必須: 相対パス './src' は使用できません",
+                        current_directory: 'C:\\Users\\info\\source\\smart-fs-mcp',
+                        solutions: [
+                          {
+                            method: 'list_directory',
+                            params: {
+                              path: 'C:\\Users\\info\\source\\smart-fs-mcp\\src'
+                            },
+                            description: '現在のディレクトリ基準で絶対パス使用'
+                          },
+                          {
+                            method: 'list_directory',
+                            params: {
+                              path: 'C:\\Users\\info\\source\\smart-fs-mcp',
+                              extensions: ['ts', 'js']
+                            },
+                            description: 'プロジェクトルートでTypeScriptファイルのみ表示'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
           '404': { $ref: '#/components/responses/NotFound' }
         }
       }
@@ -412,7 +1234,15 @@ browser testing via SwaggerUI and CURL-based testing for development.
     '/api/directories': {
       post: {
         tags: ['Directories'],
-        summary: 'Create directory',
+        summary: 'Create directory (LLM-optimized: auto-creates parent directories)',
+        description: `Create a directory with LLM-optimized behavior:
+- **Always creates parent directories** (recursive behavior built-in)
+- **Success for existing directories** (already usable = success)
+- **Simple success response** ({ "success": true })
+- **Detailed failure response** (failedInfo with solutions)
+
+LLM focus: "Is the folder now usable?" → Always returns simple success if achievable.
+Note: Parent directories are automatically created - no recursive parameter needed.`,
         requestBody: {
           required: true,
           content: {
@@ -421,40 +1251,110 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 type: 'object',
                 required: ['path'],
                 properties: {
-                  path: { type: 'string', example: './new-folder' },
-                  recursive: { type: 'boolean', default: true },
-                  mode: { type: 'string', pattern: '^[0-7]{3,4}$', example: '0755' }
+                  path: { $ref: '#/components/schemas/AbsolutePathProperty' },
+                  mode: { 
+                    type: 'string', 
+                    pattern: '^[0-7]{3,4}$', 
+                    example: '0755',
+                    description: 'Unix permissions (optional, Windows ignores)'
+                  }
                 }
               }
             }
           }
         },
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
-          '409': { $ref: '#/components/responses/Conflict' }
+          '200': {
+            description: 'Directory created or already exists (success)',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', const: true }
+                  },
+                  required: ['success']
+                },
+                examples: {
+                  simple_success: {
+                    summary: 'Simple success response',
+                    value: { success: true }
+                  }
+                }
+              }
+            }
+          },
+          '400': {
+            description: 'Directory creation failed',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', const: false },
+                    failedInfo: {
+                      type: 'object',
+                      properties: {
+                        reason: { 
+                          type: 'string',
+                          enum: ['directory_creation_failed']
+                        },
+                        message: { type: 'string' },
+                        solutions: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              method: { type: 'string' },
+                              params: { type: 'object' },
+                              description: { type: 'string' },
+                              priority: { 
+                                type: 'string',
+                                enum: ['high', 'medium', 'low']
+                              }
+                            }
+                          }
+                        }
+                      },
+                      required: ['reason', 'message', 'solutions']
+                    }
+                  },
+                  required: ['success', 'failedInfo']
+                }
+              }
+            }
+          }
         }
       },
       delete: {
         tags: ['Directories'],
-        summary: 'Delete directory',
-        description: 'Delete directory with optional dry-run preview for safety',
+        summary: 'Delete directory (LLM-optimized)',
+        description: `
+**BREAKING CHANGE**: Now requires absolute paths and returns unified response format.
+
+Features:
+- **Absolute paths required**: Relative paths will be rejected  
+- **Unified response**: Simple success or detailed failure with solutions
+- **5 failure patterns**: path_not_absolute, directory_not_empty, permission_denied, directory_not_found, directory_in_use
+- **Dry-run support**: Preview deletion with same response format
+- **Actionable solutions**: Every failure includes ready-to-use API calls
+
+Use this for safe directory deletion with clear error handling.
+        `,
         parameters: [
-          {
-            name: 'path',
-            in: 'query',
-            required: true,
-            schema: { type: 'string' }
-          },
+          { $ref: '#/components/parameters/AbsolutePath' },
           {
             name: 'recursive',
             in: 'query',
             required: false,
+            description: 'Delete directory and all contents',
             schema: { type: 'boolean', default: false }
           },
           {
             name: 'force',
             in: 'query',
             required: false,
+            description: 'Force deletion of read-only files',
             schema: { type: 'boolean', default: false }
           },
           {
@@ -468,19 +1368,149 @@ browser testing via SwaggerUI and CURL-based testing for development.
             name: 'max_preview_files',
             in: 'query',
             required: false,
+            description: 'Maximum files to show in preview',
             schema: { type: 'number', minimum: 1, maximum: 50, default: 10 }
           }
         ],
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
-          '404': { $ref: '#/components/responses/NotFound' }
+          '200': {
+            description: 'Directory deletion result',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      title: 'Success Response',
+                      required: ['success'],
+                      properties: {
+                        success: { type: 'boolean', const: true }
+                      }
+                    },
+                    {
+                      type: 'object',
+                      title: 'Failure Response',
+                      required: ['success', 'failedInfo'],
+                      properties: {
+                        success: { type: 'boolean', const: false },
+                        failedInfo: {
+                          type: 'object',
+                          properties: {
+                            reason: { 
+                              type: 'string',
+                              enum: ['not_found', 'permission_denied', 'in_use', 'not_empty', 'invalid_target', 'unknown_error']
+                            },
+                            message: { type: 'string' },
+                            provided_path: { type: 'string' },
+                            target_path: { type: 'string' },
+                            file_count: { type: 'number' },
+                            subdirectory_count: { type: 'number' },
+                            blocking_process: { type: 'string' },
+                            sample_contents: {
+                              type: 'array',
+                              items: { type: 'string' }
+                            },
+                            solutions: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  priority: { 
+                                    type: 'string',
+                                    enum: ['high', 'medium', 'low']
+                                  },
+                                  method: { type: 'string' },
+                                  params: { type: 'object' },
+                                  description: { type: 'string' }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                examples: {
+                  success: {
+                    summary: '削除成功',
+                    value: {
+                      success: true
+                    }
+                  },
+                  invalid_target: {
+                    summary: '無効なターゲット（ファイルを指定）',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'invalid_target',
+                        message: 'ディレクトリ削除にファイルパスが指定されました',
+                        target_info: {
+                          path: '/path/to/file.txt',
+                          type: 'file',
+                          exists: true
+                        },
+                        solutions: [
+                          {
+                            method: 'delete_file',
+                            params: {
+                              path: '/path/to/file.txt'
+                            },
+                            description: 'ファイル削除として実行'
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  not_empty: {
+                    summary: 'ディレクトリが空でない',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'not_empty',
+                        message: 'ディレクトリが空ではありません: /home/user/project/temp',
+                        target_info: {
+                          path: '/home/user/project/temp',
+                          type: 'directory',
+                          exists: true
+                        },
+                        solutions: [
+                          {
+                            method: 'delete_directory',
+                            params: {
+                              path: '/home/user/project/temp',
+                              recursive: true
+                            },
+                            description: '再帰的に削除（内容すべて削除）'
+                          },
+                          {
+                            method: 'list_directory',
+                            params: {
+                              path: '/home/user/project/temp'
+                            },
+                            description: 'ディレクトリ内容を確認してから個別削除'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' }
         }
       }
     },
     '/api/directories/move': {
       post: {
         tags: ['Directories'],
-        summary: 'Move or rename directory',
+        summary: 'Move or rename directory (LLM-optimized)',
+        description: `Move or rename a directory with LLM-optimized response format:
+- **Actual move**: Returns simple { "success": true }
+- **Dry run**: Returns detailed preview information
+- **Simple success for completed operations**: Minimizes cognitive load
+- **Detailed preview for planning**: Provides necessary decision-making data`,
         requestBody: {
           required: true,
           content: {
@@ -489,19 +1519,136 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 type: 'object',
                 required: ['source', 'destination'],
                 properties: {
-                  source: { type: 'string' },
-                  destination: { type: 'string' },
-                  overwrite_existing: { type: 'boolean', default: false },
-                  dry_run: { type: 'boolean', default: false }
+                  source: { $ref: '#/components/schemas/AbsolutePathProperty' },
+                  destination: { $ref: '#/components/schemas/AbsolutePathProperty' },
+                  overwrite_existing: { 
+                    type: 'boolean', 
+                    default: false,
+                    description: 'Overwrite if destination exists'
+                  },
+                  dry_run: { 
+                    type: 'boolean', 
+                    default: false,
+                    description: 'Preview operation without executing'
+                  }
                 }
               }
             }
           }
         },
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
-          '404': { $ref: '#/components/responses/NotFound' },
-          '409': { $ref: '#/components/responses/Conflict' }
+          '200': {
+            description: 'Directory moved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  oneOf: [
+                    {
+                      type: 'object',
+                      title: 'Simple Success (Actual Move)',
+                      properties: {
+                        success: { type: 'boolean', const: true }
+                      },
+                      required: ['success']
+                    },
+                    {
+                      type: 'object',
+                      title: 'Detailed Success (Dry Run)',
+                      properties: {
+                        success: { type: 'boolean', const: true },
+                        dry_run: { type: 'boolean', const: true },
+                        source: { type: 'string' },
+                        destination: { type: 'string' },
+                        operation_type: { 
+                          type: 'string',
+                          enum: ['move', 'rename'],
+                          description: 'Type of operation'
+                        },
+                        total_files: { 
+                          type: 'number',
+                          description: 'Total files to be moved'
+                        },
+                        total_directories: { 
+                          type: 'number',
+                          description: 'Total directories to be moved'
+                        },
+                        destination_exists: {
+                          type: 'boolean',
+                          description: 'Whether destination exists'
+                        },
+                        will_overwrite: {
+                          type: 'boolean',
+                          description: 'Whether operation will overwrite'
+                        }
+                      },
+                      required: ['success', 'dry_run', 'source', 'destination']
+                    }
+                  ]
+                },
+                examples: {
+                  move_success: {
+                    summary: 'Successful move (simple)',
+                    value: {
+                      success: true
+                    }
+                  },
+                  dry_run_preview: {
+                    summary: 'Dry run preview (detailed)',
+                    value: {
+                      success: true,
+                      dry_run: true,
+                      source: './old-dir',
+                      destination: './new-dir',
+                      operation_type: 'move',
+                      destination_exists: false,
+                      will_overwrite: false,
+                      total_files: 15,
+                      total_directories: 3
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': {
+            description: 'Directory move failed',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', const: false },
+                    failedInfo: {
+                      type: 'object',
+                      properties: {
+                        reason: { type: 'string' },
+                        message: { type: 'string' },
+                        source: { type: 'string' },
+                        destination: { type: 'string' },
+                        solutions: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              method: { type: 'string' },
+                              params: { type: 'object' },
+                              description: { type: 'string' },
+                              priority: { 
+                                type: 'string',
+                                enum: ['high', 'medium', 'low']
+                              }
+                            }
+                          }
+                        }
+                      },
+                      required: ['reason', 'message', 'solutions']
+                    }
+                  },
+                  required: ['success', 'failedInfo']
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -519,7 +1666,7 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 properties: {
                   file_pattern: { type: 'string', description: 'Regex pattern for filenames' },
                   content_pattern: { type: 'string', description: 'Regex pattern for file contents' },
-                  directory: { type: 'string', default: './' },
+                  directory: { $ref: '#/components/schemas/AbsolutePathProperty' },
                   recursive: { type: 'boolean', default: true },
                   max_depth: { type: 'number', default: 10 },
                   extensions: {
@@ -546,7 +1693,59 @@ browser testing via SwaggerUI and CURL-based testing for development.
           }
         },
         responses: {
-          '200': { $ref: '#/components/responses/Success' },
+          '200': {
+            description: 'Search results',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/SearchContentResponse'
+                },
+                examples: {
+                  success: {
+                    summary: 'TODOコメント検索成功',
+                    value: {
+                      success: true,
+                      matches: [
+                        {
+                          file: './src/auth.js',
+                          matchCount: 5,
+                          fileSize: 12480,
+                          contents: ['validateUser', 'UserService', 'checkPermission']
+                        },
+                        {
+                          file: './utils/helpers.js',
+                          matchCount: 2,
+                          fileSize: 3241,
+                          contents: ['formatDate', 'parseJSON']
+                        }
+                      ]
+                    }
+                  },
+                  no_matches: {
+                    summary: 'マッチなし',
+                    value: {
+                      success: false,
+                      failedInfo: {
+                        reason: 'no_matches',
+                        message: 'No matches found',
+                        solutions: [
+                          {
+                            method: 'search_content',
+                            params: {
+                              content_pattern: 'TODO|FIXME|IMPORTANT',
+                              directory: './',
+                              case_sensitive: false
+                            },
+                            description: 'より広い検索パターンで再検索'
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           '400': { $ref: '#/components/responses/BadRequest' }
         }
       },
@@ -568,7 +1767,12 @@ browser testing via SwaggerUI and CURL-based testing for development.
           {
             name: 'directory',
             in: 'query',
-            schema: { type: 'string', default: './' }
+            description: '絶対パス必須（相対パス不可）。Windows・Unix両形式自動対応。',
+            schema: {
+              type: 'string',
+              pattern: '^(/|[A-Za-z]:[/\\\\])',
+              example: 'C:/Users/info/source/smart-fs-mcp'
+            }
           },
           {
             name: 'extensions',
@@ -579,16 +1783,58 @@ browser testing via SwaggerUI and CURL-based testing for development.
             name: 'max_files',
             in: 'query',
             schema: { type: 'number', default: 100 }
-          }
+          },
         ],
         responses: {
-          '200': { $ref: '#/components/responses/Success' }
+          '200': {
+            description: 'Search results',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/SearchContentResponse'
+                }
+              }
+            }
+          }
         }
       }
     }
   },
   components: {
+    parameters: {
+      AbsolutePath: {
+        name: 'path',
+        in: 'query',
+        required: true,
+        description: '絶対パス必須（相対パス不可）。Windows・Unix両形式自動対応。',
+        schema: {
+          type: 'string',
+          pattern: '^(/|[A-Za-z]:[/\\\\])',
+          example: 'C:/Users/info/source/smart-fs-mcp'
+        },
+        examples: {
+          windows_forward: {
+            summary: 'Windows（推奨）',
+            value: 'C:/Users/info/source/smart-fs-mcp'
+          },
+          windows_backslash: {
+            summary: 'Windows（バックスラッシュ）',
+            value: 'C:\\Users\\info\\source\\smart-fs-mcp'
+          },
+          unix: {
+            summary: 'Unix/Linux',
+            value: '/home/user/project/src'
+          }
+        }
+      }
+    },
     schemas: {
+      AbsolutePathProperty: {
+        type: 'string',
+        pattern: '^(/|[A-Za-z]:[/\\\\])',
+        description: '絶対パス必須（相対パス不可）。Windows・Unix両形式自動対応。',
+        example: 'C:/Users/info/source/smart-fs-mcp'
+      },
       SuccessResponse: {
         type: 'object',
         properties: {
@@ -606,26 +1852,311 @@ browser testing via SwaggerUI and CURL-based testing for development.
       },
       ErrorResponse: {
         type: 'object',
+        required: ['success', 'failedInfo'],
         properties: {
-          success: { type: 'boolean', example: false },
-          error: {
+          success: {
+            type: 'boolean',
+            enum: [false],
+            description: 'Operation failed'
+          },
+          failedInfo: {
             type: 'object',
+            required: ['reason', 'message', 'solutions'],
             properties: {
-              code: { type: 'string' },
-              message: { type: 'string' },
-              suggestions: {
+              reason: {
+                type: 'string',
+                description: 'Specific failure reason',
+                enum: [
+                  'not_found',
+                  'permission_denied', 
+                  'validation_error',
+                  'size_exceeded',
+                  'binary_file',
+                  'route_not_found',
+                  'unknown_error'
+                ]
+              },
+              message: {
+                type: 'string',
+                description: 'Human-readable error message'
+              },
+              solutions: {
                 type: 'array',
-                items: { type: 'string' }
+                items: { $ref: '#/components/schemas/Solution' },
+                description: 'Prioritized solutions to resolve the error'
+              },
+              error_code: {
+                type: 'string',
+                description: 'Optional technical error code',
+                example: 'ENOENT'
+              },
+              details: {
+                type: 'object',
+                description: 'Additional error details (development mode only)'
+              }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false,
+        example: {
+          success: false,
+          failedInfo: {
+            reason: 'not_found',
+            message: 'ファイルまたはディレクトリが見つかりません',
+            solutions: [
+              {
+                method: 'list_directory',
+                params: { path: '/parent/directory' },
+                description: '親ディレクトリの内容を確認',
+                priority: 'high'
+              }
+            ],
+            error_code: 'ENOENT'
+          }
+        }
+      },
+      // Simple Response Schemas
+      ReadFileResponse: {
+        oneOf: [
+          { $ref: '#/components/schemas/ReadFileSuccess' },
+          { $ref: '#/components/schemas/ReadFileFailure' }
+        ]
+      },
+      ReadFileSuccess: {
+        type: 'object',
+        required: ['success', 'content'],
+        properties: {
+          success: {
+            type: 'boolean',
+            enum: [true]
+          },
+          content: {
+            type: 'string',
+            description: 'ファイルの内容'
+          }
+        },
+        additionalProperties: false,
+        example: {
+          success: true,
+          content: "console.log('Hello World!');"
+        }
+      },
+      ReadFileFailure: {
+        type: 'object',
+        required: ['success', 'failedInfo'],
+        properties: {
+          success: {
+            type: 'boolean',
+            enum: [false]
+          },
+          failedInfo: {
+            type: 'object',
+            required: ['reason', 'message', 'solutions'],
+            properties: {
+              reason: {
+                type: 'string',
+                enum: ['size_exceeded', 'binary_file', 'not_found', 'permission_denied']
+              },
+              message: {
+                type: 'string'
+              },
+              file_size: {
+                type: 'number'
+              },
+              file_type: {
+                type: 'string'
+              },
+              solutions: {
+                type: 'array',
+                items: {
+                  $ref: '#/components/schemas/Solution'
+                }
+              },
+              preview: {
+                type: 'object',
+                properties: {
+                  first_lines: {
+                    type: 'array',
+                    items: {
+                      type: 'string'
+                    }
+                  },
+                  summary: {
+                    type: 'string'
+                  }
+                }
               }
             }
+          }
+        },
+        additionalProperties: false
+      },
+      Solution: {
+        type: 'object',
+        required: ['method', 'params', 'description'],
+        properties: {
+          method: {
+            type: 'string',
+            description: '実行すべきAPI method'
           },
-          meta: {
+          params: {
             type: 'object',
+            description: 'そのまま使用可能なパラメータ',
+            additionalProperties: true
+          },
+          description: {
+            type: 'string',
+            description: 'LLM向けの説明'
+          }
+        },
+        example: {
+          method: 'force_read_file',
+          params: {
+            path: './large-file.tsx',
+            acknowledge_risk: true,
+            max_size_mb: 50
+          },
+          description: '制限を無視して強制読み取り'
+        }
+      },
+      // Simple Search Schemas
+      SearchMatch: {
+        type: 'object',
+        required: ['file', 'matchCount', 'fileSize', 'contents'],
+        properties: {
+          file: {
+            type: 'string',
+            description: 'ファイルパス'
+          },
+          matchCount: {
+            type: 'number',
+            description: 'マッチ数（重要度判断用）'
+          },
+          fileSize: {
+            type: 'number',
+            description: 'ファイルサイズ（バイト）'
+          },
+          contents: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '抽出されたキーワード（関数名・クラス名等）',
+            maxItems: 5
+          }
+        },
+        example: {
+          file: './src/auth.js',
+          matchCount: 5,
+          fileSize: 12480,
+          contents: ['validateUser', 'UserService', 'checkPermission']
+        }
+      },
+      SearchContentResponse: {
+        oneOf: [
+          { $ref: '#/components/schemas/SearchContentSuccess' },
+          { $ref: '#/components/schemas/SearchContentFailure' }
+        ]
+      },
+      SearchContentSuccess: {
+        type: 'object',
+        required: ['success', 'matches'],
+        properties: {
+          success: {
+            type: 'boolean',
+            enum: [true]
+          },
+          matches: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/SearchMatch' }
+          }
+        },
+        additionalProperties: false
+      },
+      SearchContentFailure: {
+        type: 'object',
+        required: ['success', 'failedInfo'],
+        properties: {
+          success: {
+            type: 'boolean',
+            enum: [false]
+          },
+          failedInfo: {
+            type: 'object',
+            required: ['reason', 'message', 'solutions'],
             properties: {
-              timestamp: { type: 'string' },
-              version: { type: 'string' },
-              requestId: { type: 'string' }
+              reason: {
+                type: 'string'
+              },
+              message: {
+                type: 'string'
+              },
+              solutions: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/Solution' }
+              }
             }
+          }
+        },
+        additionalProperties: false
+      },
+      PathValidationErrorResponse: {
+        type: 'object',
+        required: ['success', 'failedInfo'],
+        properties: {
+          success: {
+            type: 'boolean',
+            enum: [false],
+            description: 'Operation failed due to path validation error'
+          },
+          failedInfo: {
+            type: 'object',
+            required: ['reason', 'message', 'provided_path', 'absolute_path', 'solutions'],
+            properties: {
+              reason: {
+                type: 'string',
+                enum: ['path_not_absolute'],
+                description: 'Specific reason for validation failure'
+              },
+              message: {
+                type: 'string',
+                description: 'Human-readable error message in Japanese',
+                example: '相対パスは受け付けません。絶対パスを使用してください。（BREAKING CHANGE）'
+              },
+              provided_path: {
+                type: 'string',
+                description: 'The relative path that was provided',
+                example: './src/index.js'
+              },
+              absolute_path: {
+                type: 'string',
+                description: 'The suggested absolute path to use instead',
+                example: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js'
+              },
+              solutions: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/Solution' },
+                description: 'Prioritized solutions to fix the path validation error'
+              }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false,
+        example: {
+          success: false,
+          failedInfo: {
+            reason: 'path_not_absolute',
+            message: '相対パスは受け付けません。絶対パスを使用してください。（BREAKING CHANGE）',
+            provided_path: './src/index.js',
+            absolute_path: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js',
+            solutions: [
+              {
+                method: 'read_file',
+                params: { path: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js' },
+                description: '絶対パス「/mnt/c/Users/info/source/smart-fs-mcp/src/index.js」で再実行',
+                priority: 'high'
+              }
+            ]
           }
         }
       }
@@ -676,6 +2207,14 @@ browser testing via SwaggerUI and CURL-based testing for development.
         content: {
           'application/json': {
             schema: { $ref: '#/components/schemas/ErrorResponse' }
+          }
+        }
+      },
+      PathValidationError: {
+        description: 'Path validation error - relative path provided instead of absolute path',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/PathValidationErrorResponse' }
           }
         }
       },

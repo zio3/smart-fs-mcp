@@ -6,7 +6,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
-import type { FileEncoding } from '../core/types.js';
+// import type { FileEncoding } from '../core/types.js';
 
 /**
  * 許可ディレクトリ情報
@@ -61,8 +61,8 @@ export async function listAllowedDirs(): Promise<ListAllowedDirsResult> {
     const resolvedPath = resolvedDirs[i];
     
     const info: AllowedDirectoryInfo = {
-      original_path: originalPath,
-      resolved_path: resolvedPath,
+      original_path: originalPath || '',
+      resolved_path: resolvedPath || '',
       exists: false,
       accessible: false,
       permissions: {
@@ -73,14 +73,14 @@ export async function listAllowedDirs(): Promise<ListAllowedDirsResult> {
     
     try {
       // 存在確認
-      const stats = await fs.stat(resolvedPath);
+      const stats = await fs.stat(resolvedPath || '');
       
       if (stats.isDirectory()) {
         info.exists = true;
         
         // アクセス権限チェック
         try {
-          await fs.access(resolvedPath, fs.constants.R_OK);
+          await fs.access(resolvedPath || '', fs.constants.R_OK);
           info.permissions.readable = true;
           info.accessible = true;
         } catch {
@@ -88,7 +88,7 @@ export async function listAllowedDirs(): Promise<ListAllowedDirsResult> {
         }
         
         try {
-          await fs.access(resolvedPath, fs.constants.W_OK);
+          await fs.access(resolvedPath || '', fs.constants.W_OK);
           info.permissions.writable = true;
         } catch {
           // 書き込み権限なし
@@ -97,10 +97,10 @@ export async function listAllowedDirs(): Promise<ListAllowedDirsResult> {
         // 統計情報を収集（アクセス可能な場合のみ）
         if (info.accessible) {
           try {
-            const files = await fs.readdir(resolvedPath);
-            const fileCount = files.filter(async (file) => {
+            const files = await fs.readdir(resolvedPath || '');
+            files.filter(async (file) => {
               try {
-                const filePath = path.join(resolvedPath, file);
+                const filePath = path.join(resolvedPath || '', file);
                 const fileStat = await fs.stat(filePath);
                 return fileStat.isFile();
               } catch {

@@ -11,12 +11,12 @@ const MAX_PATTERN_LENGTH = 1000;
 /**
  * ReDoS（正規表現DoS）攻撃のリスクがあるパターン
  */
-const DANGEROUS_PATTERNS = [
-  /(.*a){x,}\d/,           // 指数的バックトラッキング
-  /([a-zA-Z]+)*$/,         // ネストした量指定子
-  /(a+)+$/,                // 重複した量指定子
-  /(.*){x,}$/,             // 非効率な繰り返し
-];
+// const DANGEROUS_PATTERNS = [
+//   /(.*a){x,}\d/,           // 指数的バックトラッキング
+//   /([a-zA-Z]+)*$/,         // ネストした量指定子
+//   /(a+)+$/,                // 重複した量指定子
+//   /(.*){x,}$/,             // 非効率な繰り返し
+// ];
 
 /**
  * 正規表現パターンを検証
@@ -132,7 +132,7 @@ export async function executeRegexWithTimeout(
   timeoutMs: number = 1000
 ): Promise<{ matches: RegExpMatchArray | null; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const startTime = Date.now();
+    // const startTime = Date.now();
     let timedOut = false;
 
     // タイムアウト設定
@@ -169,25 +169,28 @@ export function findMatchesWithContext(
   const results: Array<{ lineNumber: number; line: string; context: string[] }> = [];
   
   for (let i = 0; i < lines.length && results.length < maxMatches; i++) {
-    if (regex.test(lines[i])) {
+    const currentLine = lines[i];
+    if (currentLine && regex.test(currentLine)) {
       const context: string[] = [];
       
       // 前のコンテキスト行
       for (let j = Math.max(0, i - contextLines); j < i; j++) {
-        context.push(lines[j]);
+        const contextLine = lines[j];
+        if (contextLine) context.push(contextLine);
       }
       
       // マッチした行
-      context.push(lines[i]);
+      if (currentLine) context.push(currentLine);
       
       // 後のコンテキスト行
       for (let j = i + 1; j <= Math.min(lines.length - 1, i + contextLines); j++) {
-        context.push(lines[j]);
+        const contextLine = lines[j];
+        if (contextLine) context.push(contextLine);
       }
       
       results.push({
         lineNumber: i + 1,
-        line: lines[i],
+        line: currentLine || '',
         context
       });
       

@@ -251,7 +251,7 @@ export function initializeSecurityController(allowedDirs?: string[]): SecurityCo
   if (allowedDirs) {
     // テスト用: process.argvを一時的に変更
     const originalArgv = process.argv;
-    process.argv = [process.argv[0], process.argv[1], ...allowedDirs];
+    process.argv = [process.argv[0] || '', process.argv[1] || '', ...allowedDirs];
     securityInstance = new SecurityControllerV2();
     process.argv = originalArgv;
   } else {

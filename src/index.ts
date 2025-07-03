@@ -28,43 +28,29 @@ import { mkdir } from './tools/mkdir.js';
 import { deleteFile } from './tools/delete-file.js';
 import { deleteDirectory } from './tools/delete-directory.js';
 import { moveDirectory } from './tools/move-directory.js';
-import { withReadSecurity, withWriteSecurity, withDirectorySecurity, enhanceErrorWithSecurity } from './utils/security-wrapper.js';
+// Security wrapper imports removed - tools handle validation internally
 import { SAFETY_LIMITS } from './utils/constants.js';
 import type { 
   ReadFileParams,
   ReadFileForceParams,
-  ListDirectoryParams,
+  EnhancedListDirectoryParams,
   SearchContentParams,
   WriteFileParams,
   EditFileParams,
   MoveFileParams,
-  ReadFileResult,
-  ListDirectoryResponse,
-  SearchContentResponse,
-  WriteFileResult,
-  EditFileResult,
-  MoveFileResult
 } from './core/types.js';
 import type {
-  FileInfoParams,
-  FileInfoResult
+  FileInfoParams
 } from './tools/file-info.js';
 import type {
-  MkdirParams,
-  MkdirResult
+  MkdirParams
 } from './tools/mkdir.js';
 import type {
-  ListAllowedDirsResult
-} from './tools/list-allowed-dirs.js';
-import type {
   DeleteFileParams,
-  DeleteFileResult,
-  DeleteDirectoryParams,
-  DeleteDirectoryResult
+  DeleteDirectoryParams
 } from './types/delete-operations.js';
 import type {
-  MoveDirectoryParams,
-  MoveDirectoryResult
+  MoveDirectoryParams
 } from './tools/move-directory.js';
 
 /**
@@ -153,27 +139,23 @@ class SmartFilesystemMCP {
         },
         {
           name: 'list_directory',
-          description: 'List directory contents with file details and subdirectory summaries',
+          description: 'List directory contents (LLM-optimized, BREAKING: absolute paths required)',
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Directory path to list',
+                description: 'Absolute directory path (BREAKING: relative paths rejected)',
               },
-              include_hidden: {
-                type: 'boolean',
-                description: 'Include hidden files (default: false)',
+              extensions: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'File extensions to include (e.g., ["js", "ts", ".json"])',
               },
-              sort_by: {
-                type: 'string',
-                enum: ['name', 'size', 'modified'],
-                description: 'Sort criteria (default: name)',
-              },
-              sort_order: {
-                type: 'string',
-                enum: ['asc', 'desc'],
-                description: 'Sort order (default: asc)',
+              exclude_dirs: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Directory names to exclude (e.g., ["node_modules", ".git"])',
               },
             },
             required: ['path'],
@@ -465,43 +447,43 @@ class SmartFilesystemMCP {
 
         switch (name) {
           case 'read_file':
-            return await this.handleReadFile(args as ReadFileParams);
+            return await this.handleReadFile(args as unknown as ReadFileParams);
             
           case 'read_file_force':
-            return await this.handleReadFileForce(args as ReadFileForceParams);
+            return await this.handleReadFileForce(args as unknown as ReadFileForceParams);
           
           case 'list_directory':
-            return await this.handleListDirectory(args as ListDirectoryParams);
+            return await this.handleListDirectory(args as unknown as EnhancedListDirectoryParams);
           
           case 'search_content':
-            return await this.handleSearchContent(args as SearchContentParams);
+            return await this.handleSearchContent(args as unknown as SearchContentParams);
           
           case 'write_file':
-            return await this.handleWriteFile(args as WriteFileParams);
+            return await this.handleWriteFile(args as unknown as WriteFileParams);
           
           case 'edit_file':
-            return await this.handleEditFile(args as EditFileParams);
+            return await this.handleEditFile(args as unknown as EditFileParams);
           
           case 'move_file':
-            return await this.handleMoveFile(args as MoveFileParams);
+            return await this.handleMoveFile(args as unknown as MoveFileParams);
           
           case 'list_allowed_dirs':
             return await this.handleListAllowedDirs();
           
           case 'file_info':
-            return await this.handleFileInfo(args as FileInfoParams);
+            return await this.handleFileInfo(args as unknown as FileInfoParams);
           
           case 'mkdir':
-            return await this.handleMkdir(args as MkdirParams);
+            return await this.handleMkdir(args as unknown as MkdirParams);
           
           case 'delete_file':
-            return await this.handleDeleteFile(args as DeleteFileParams);
+            return await this.handleDeleteFile(args as unknown as DeleteFileParams);
           
           case 'delete_directory':
-            return await this.handleDeleteDirectory(args as DeleteDirectoryParams);
+            return await this.handleDeleteDirectory(args as unknown as DeleteDirectoryParams);
           
           case 'move_directory':
-            return await this.handleMoveDirectory(args as MoveDirectoryParams);
+            return await this.handleMoveDirectory(args as unknown as MoveDirectoryParams);
           
           default:
             throw new McpError(
@@ -514,16 +496,28 @@ class SmartFilesystemMCP {
           throw error;
         }
         
-        // Enhance error with security info if applicable
-        const enhancedError = enhanceErrorWithSecurity(
-          error instanceof Error ? error : new Error('Unknown error occurred')
-        );
+        // For unexpected errors not handled by tools, return unified error format
+        const unifiedError = {
+          success: false,
+          error: {
+            code: 'operation_failed',
+            message: error instanceof Error ? error.message : 'Unknown error occurred',
+            details: {
+              operation: request.params.name
+            },
+            suggestions: [
+              '操作を再試行してください',
+              'パラメータを確認してください'
+            ]
+          }
+        };
         
-        // Convert to MCP error
-        throw new McpError(
-          ErrorCode.InternalError,
-          enhancedError.message
-        );
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(unifiedError, null, 2)
+          }]
+        };
       }
     });
   }
@@ -531,343 +525,197 @@ class SmartFilesystemMCP {
   /**
    * Handle read_file tool
    */
-  private async handleReadFile(params: ReadFileParams): Promise<{ content: ReadFileResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      // Apply security check
-      const result = await withReadSecurity(
-        params,
-        async (validatedPath) => {
-          const securedParams = { ...params, path: validatedPath };
-          return readFile(securedParams, this.safety, this.analyzer);
-        },
-        this.safety,
-        this.analyzer
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Read failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleReadFile(params: ReadFileParams): Promise<{ content: any[] }> {
+    // パスバリデーションは readFile 内で実施される
+    const result = await readFile(params, this.safety, this.analyzer);
+    
+    // エラーの場合も正常にレスポンスを返す
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
   
   /**
    * Handle read_file_force tool
    */
-  private async handleReadFileForce(params: ReadFileForceParams): Promise<{ content: ReadFileResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      // Apply security check
-      const result = await withReadSecurity(
-        params,
-        async (validatedPath) => {
-          const securedParams = { ...params, path: validatedPath };
-          return readFileForce(securedParams, this.safety, this.analyzer);
-        },
-        this.safety,
-        this.analyzer
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Read force failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleReadFileForce(params: ReadFileForceParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await readFileForce(params, this.safety, this.analyzer);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
-   * Handle list_directory tool
+   * Handle list_directory tool (LLM-optimized)
    */
-  private async handleListDirectory(params: ListDirectoryParams): Promise<{ content: ListDirectoryResponse[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('Directory path is required');
-      }
-      
-      // Apply security check
-      const result = await withDirectorySecurity(
-        params,
-        async (securedParams) => listDirectory(securedParams, this.safety),
-        this.safety
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `List directory failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleListDirectory(params: EnhancedListDirectoryParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await listDirectory(params, this.safety);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle search_content tool
    */
-  private async handleSearchContent(params: SearchContentParams): Promise<{ content: SearchContentResponse[] }> {
-    try {
-      if (!params.file_pattern && !params.content_pattern) {
-        throw new Error('Either file_pattern or content_pattern is required');
-      }
-      
-      // Apply security check
-      const result = await withDirectorySecurity(
-        params,
-        async (securedParams) => searchContent(securedParams, this.safety),
-        this.safety
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Search content failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleSearchContent(params: SearchContentParams): Promise<{ content: any[] }> {
+    // Remove parameter validation and old failedInfo handling - let tool handle it
+    const result = await searchContent(params, this.safety);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle write_file tool
    */
-  private async handleWriteFile(params: WriteFileParams): Promise<{ content: WriteFileResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      if (params.content === undefined || params.content === null) {
-        throw new Error('Content is required');
-      }
-      
-      // Apply security check
-      const result = await withWriteSecurity(
-        params,
-        async (securedParams) => writeFile(securedParams, this.safety),
-        this.safety
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Write file failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleWriteFile(params: WriteFileParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await writeFile(params, this.safety);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle edit_file tool
    */
-  private async handleEditFile(params: EditFileParams): Promise<{ content: EditFileResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      if (!params.edits || params.edits.length === 0) {
-        throw new Error('At least one edit operation is required');
-      }
-      
-      // Apply security check
-      const result = await withWriteSecurity(
-        params,
-        async (securedParams) => editFile(securedParams, this.safety, this.analyzer),
-        this.safety,
-        this.analyzer
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Edit file failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleEditFile(params: EditFileParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await editFile(params, this.safety, this.analyzer);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle move_file tool
    */
-  private async handleMoveFile(params: MoveFileParams): Promise<{ content: MoveFileResult[] }> {
-    try {
-      if (!params.source) {
-        throw new Error('Source path is required');
-      }
-      
-      if (!params.destination) {
-        throw new Error('Destination path is required');
-      }
-      
-      // Apply security check
-      const result = await withWriteSecurity(
-        params,
-        async (securedParams) => moveFile(securedParams, this.safety),
-        this.safety
-      );
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Move file failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleMoveFile(params: MoveFileParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await moveFile(params, this.safety);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle list_allowed_dirs tool
    */
-  private async handleListAllowedDirs(): Promise<{ content: ListAllowedDirsResult[] }> {
-    try {
-      const result = await listAllowedDirs();
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `List allowed dirs failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleListAllowedDirs(): Promise<{ content: any[] }> {
+    // 実際のデータを取得してJSON文字列として返す
+    const result = await listAllowedDirs();
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle file_info tool
    */
-  private async handleFileInfo(params: FileInfoParams): Promise<{ content: FileInfoResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      const result = await fileInfo(params, this.analyzer);
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `File info failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleFileInfo(params: FileInfoParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await fileInfo(params);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle mkdir tool
    */
-  private async handleMkdir(params: MkdirParams): Promise<{ content: MkdirResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('Directory path is required');
-      }
-      
-      const result = await mkdir(params);
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Mkdir failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleMkdir(params: MkdirParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await mkdir(params);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle delete_file tool
    */
-  private async handleDeleteFile(params: DeleteFileParams): Promise<{ content: DeleteFileResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('File path is required');
-      }
-      
-      const result = await deleteFile(params);
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Delete file failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleDeleteFile(params: DeleteFileParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await deleteFile(params);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle delete_directory tool
    */
-  private async handleDeleteDirectory(params: DeleteDirectoryParams): Promise<{ content: DeleteDirectoryResult[] }> {
-    try {
-      if (!params.path) {
-        throw new Error('Directory path is required');
-      }
-      
-      const result = await deleteDirectory(params);
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Delete directory failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleDeleteDirectory(params: DeleteDirectoryParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await deleteDirectory(params);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
    * Handle move_directory tool
    */
-  private async handleMoveDirectory(params: MoveDirectoryParams): Promise<{ content: MoveDirectoryResult[] }> {
-    try {
-      if (!params.source) {
-        throw new Error('Source path is required');
-      }
-      
-      if (!params.destination) {
-        throw new Error('Destination path is required');
-      }
-      
-      const result = await moveDirectory(params);
-      
-      return {
-        content: [result],
-      };
-    } catch (error) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Move directory failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+  private async handleMoveDirectory(params: MoveDirectoryParams): Promise<{ content: any[] }> {
+    // Remove parameter validation - let tool handle it
+    const result = await moveDirectory(params);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
   }
 
   /**
@@ -888,10 +736,24 @@ class SmartFilesystemMCP {
 // Main entry point
 async function main() {
   try {
+    // Get allowed directories from command line arguments
+    const allowedDirs = process.argv.slice(2);
+    
+    if (allowedDirs.length === 0) {
+      allowedDirs.push(process.cwd());
+    }
+    
+    // Initialize security controller with allowed directories
+    const { initializeSecurityController } = await import('./core/security-controller-v2.js');
+    await initializeSecurityController(allowedDirs);
+    
     const server = new SmartFilesystemMCP();
     await server.start();
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('[ERROR] Failed to start server:', error);
+    if (error instanceof Error) {
+      console.error('[ERROR] Stack trace:', error.stack);
+    }
     process.exit(1);
   }
 }
@@ -908,7 +770,21 @@ process.on('SIGTERM', () => {
 });
 
 // Start server if run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Handle both Unix and Windows path formats
+const scriptPath = process.argv[1];
+if (scriptPath) {
+  const normalizedPath = scriptPath.replace(/\\/g, '/');
+  const isMainModule = import.meta.url === `file://${normalizedPath}` ||
+                      import.meta.url === `file:///${normalizedPath}`;
+  
+  if (isMainModule) {
+    main().catch((error) => {
+      console.error('Fatal error:', error);
+      process.exit(1);
+    });
+  }
+} else {
+  // Fallback: always start if no script path
   main().catch((error) => {
     console.error('Fatal error:', error);
     process.exit(1);

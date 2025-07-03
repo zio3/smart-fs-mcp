@@ -7,15 +7,19 @@ import { Router } from 'express';
 import {
   getFileInfo,
   getFileContent,
-  getFileContentForce,
+  // getFileContentForce, // Removed - unified into getFileContent with force parameter
   writeFileContent,
   editFileContent,
   moveFileLocation,
   deleteFileSafely
 } from '../controllers/file-controller.js';
 import { validate, commonRules } from '../middleware/validator.js';
+import { parseQueryParameters } from '../middleware/query-parser.js';
 
 const router = Router();
+
+// Apply query parameter parsing to all routes
+router.use(parseQueryParameters);
 
 /**
  * GET /info - Get file information
@@ -29,40 +33,23 @@ router.get('/info',
 );
 
 /**
- * GET /content - Read file content
+ * GET /content - Read file content with unified force parameter (LLM cognitive load reduction)
  */
 router.get('/content',
   validate([
-    commonRules.filePath(true),
-    commonRules.encoding()
+    commonRules.absoluteFilePath(true), // BREAKING: Absolute path required
+    commonRules.encoding(),
+    commonRules.boolean('force', false) // Unified force parameter for cognitive load reduction
   ]),
   getFileContent
 );
 
 /**
- * GET /content/force - Force read file content
- */
-router.get('/content/force',
-  validate([
-    commonRules.filePath(true),
-    commonRules.encoding(),
-    {
-      field: 'max_size_mb',
-      required: false,
-      type: 'number',
-      min: 1,
-      max: 100
-    }
-  ]),
-  getFileContentForce
-);
-
-/**
- * POST /content - Write file content
+ * POST /content - Write file content (absolute path required)
  */
 router.post('/content',
   validate([
-    commonRules.filePath(true),
+    commonRules.absoluteFilePath(true), // BREAKING: Absolute path required
     commonRules.content(true),
     commonRules.encoding()
   ]),
@@ -70,11 +57,11 @@ router.post('/content',
 );
 
 /**
- * PUT /edit - Edit file content
+ * PUT /edit - Edit file content (LLM-optimized with breaking changes)
  */
 router.put('/edit',
   validate([
-    commonRules.filePath(true),
+    commonRules.absoluteFilePath(true), // BREAKING: Absolute path required
     {
       field: 'edits',
       required: true,
@@ -89,22 +76,22 @@ router.put('/edit',
 );
 
 /**
- * POST /move - Move file
+ * POST /move - Move file (LLM-optimized with breaking changes)
  */
 router.post('/move',
   validate([
-    ...commonRules.sourceAndDestination(),
+    ...commonRules.absoluteSourceAndDestination(), // BREAKING: Absolute paths required
     commonRules.boolean('overwrite_existing', false)
   ]),
   moveFileLocation
 );
 
 /**
- * DELETE / - Delete file
+ * DELETE / - Delete file (LLM-optimized with breaking changes)
  */
 router.delete('/',
   validate([
-    commonRules.filePath(true),
+    commonRules.absoluteFilePath(true), // BREAKING: Absolute path required
     commonRules.boolean('force', false)
   ]),
   deleteFileSafely

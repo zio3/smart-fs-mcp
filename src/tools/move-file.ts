@@ -5,43 +5,86 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { PathLike } from 'fs';
 import { SafetyController } from '../core/safety-controller.js';
 import { SAFETY_LIMITS } from '../utils/constants.js';
 import type { 
-  MoveFileParams,
-  MoveFileResult
+  MoveFileParams
 } from '../core/types.js';
+import { createUnifiedError, createUnifiedErrorFromException, ErrorCodes, UnifiedError, validatePath } from '../utils/unified-error-handler.js';
 
 /**
- * ファイル移動メインツール
+ * Move file success response
+ */
+interface MoveFileSuccess {
+  success: true;
+  status: 'success';
+  operation_info: {
+    source: string;
+    destination: string;
+    operation_type: 'move' | 'rename' | 'backup';
+    size_bytes: number;
+  };
+}
+
+/**
+ * ファイル移動メインツール（LLM最適化版）
  */
 export async function moveFile(
   params: MoveFileParams,
   safety: SafetyController
-): Promise<MoveFileResult> {
+): Promise<MoveFileSuccess | UnifiedError> {
+  
   try {
-    // パラメータ検証
-    if (!params.source) {
-      throw new Error('Source path is required');
+    // ソースパスバリデーション
+    const sourceValidation = validatePath(params.source);
+    if (!sourceValidation.valid) {
+      return createUnifiedError(
+        ErrorCodes.MISSING_PATH,
+        'move_file',
+        { source: params.source, destination: params.destination },
+        sourceValidation.error?.includes('empty') ? 'ソースファイルパスが指定されていません' : 'ソースパスが不正です'
+      );
     }
     
-    if (!params.destination) {
-      throw new Error('Destination path is required');
+    // 先パスバリデーション
+    const destValidation = validatePath(params.destination);
+    if (!destValidation.valid) {
+      return createUnifiedError(
+        ErrorCodes.MISSING_PATH,
+        'move_file',
+        { source: params.source, destination: params.destination },
+        destValidation.error?.includes('empty') ? '先ファイルパスが指定されていません' : '先パスが不正です'
+      );
     }
     
-    // パスの正規化
+    // オリジナルパスを保持
+    const originalSource = params.source;
+    const originalDest = params.destination;
+    
+    // パスの正規化（内部処理用）
     const sourcePath = path.normalize(params.source);
     const destPath = path.normalize(params.destination);
     
     // 同じパスチェック
     if (sourcePath === destPath) {
-      throw new Error('Source and destination paths are the same');
+      return createUnifiedError(
+        ErrorCodes.INVALID_PATH,
+        'move_file',
+        { source: params.source, destination: params.destination },
+        'ソースと先が同じファイルです'
+      );
     }
     
     // ソースファイルの存在確認とアクセスチェック
-    const sourceCheck = await safety.validateFileAccess(sourcePath);
+    const sourceCheck = await safety.validateFileAccess(sourcePath, 'read');
     if (!sourceCheck.safe) {
-      throw new Error(`Source file access denied: ${sourceCheck.reason}`);
+      return createUnifiedError(
+        ErrorCodes.ACCESS_DENIED,
+        'move_file',
+        { source: params.source, destination: params.destination },
+        `ソースファイルへのアクセスが拒否されました: ${sourceCheck.reason}`
+      );
     }
     
     // ソースファイルの情報取得
@@ -49,19 +92,37 @@ export async function moveFile(
     try {
       sourceStats = await fs.stat(sourcePath);
       if (!sourceStats.isFile()) {
-        throw new Error('Source is not a file');
+        return createUnifiedError(
+          ErrorCodes.OPERATION_FAILED,
+          'move_file',
+          { source: params.source, destination: params.destination },
+          'ソースはファイルではありません'
+        );
       }
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
-        throw new Error('Source file does not exist');
+        return createUnifiedError(
+          ErrorCodes.FILE_NOT_FOUND,
+          'move_file',
+          { source: params.source, destination: params.destination },
+          'ソースファイルが存在しません'
+        );
       }
-      throw error;
+      return createUnifiedErrorFromException(error, 'move_file', params.source);
     }
     
     // ファイルサイズチェック
     if (sourceStats.size > SAFETY_LIMITS.MOVE_MAX_FILE_SIZE) {
-      throw new Error(
-        `File too large to move (${(sourceStats.size / 1024 / 1024).toFixed(2)}MB > ${SAFETY_LIMITS.MOVE_MAX_FILE_SIZE / 1024 / 1024}MB)`
+      return createUnifiedError(
+        ErrorCodes.FILE_TOO_LARGE,
+        'move_file',
+        { 
+          source: params.source, 
+          destination: params.destination,
+          actual_size: sourceStats.size,
+          max_size: SAFETY_LIMITS.MOVE_MAX_FILE_SIZE
+        },
+        `ファイルサイズが大きすぎます（${(sourceStats.size / 1024 / 1024).toFixed(2)}MB > ${SAFETY_LIMITS.MOVE_MAX_FILE_SIZE / 1024 / 1024}MB）`
       );
     }
     
@@ -69,46 +130,38 @@ export async function moveFile(
     const destDir = path.dirname(destPath);
     const destDirCheck = await safety.validateDirectoryAccess(destDir);
     if (!destDirCheck.safe) {
-      throw new Error(`Destination directory access denied: ${destDirCheck.reason}`);
+      return createUnifiedError(
+        ErrorCodes.ACCESS_DENIED,
+        'move_file',
+        { source: params.source, destination: params.destination },
+        `先ディレクトリへのアクセスが拒否されました: ${destDirCheck.reason}`
+      );
     }
     
     // 宛先ファイルの存在確認
-    let destExists = false;
-    let destStats;
     try {
-      destStats = await fs.stat(destPath);
-      destExists = true;
+      await fs.stat(destPath as PathLike);
       
       if (!params.overwrite_existing) {
-        // 上書き警告を返す
-        return {
-          status: 'warning',
-          operation_info: {
-            source: sourcePath,
-            destination: destPath,
-            operation_type: getOperationType(sourcePath, destPath),
-            size_bytes: sourceStats.size
-          },
-          issue_details: {
-            reason: 'Destination file already exists',
-            existing_file_info: {
-              size_bytes: destStats.size,
-              last_modified: destStats.mtime.toISOString()
-            }
-          },
-          alternatives: {
-            suggestions: [
-              'Use overwrite_existing=true if replacement is intended',
-              'Choose different destination filename',
-              'Use read_file to check existing content first',
-              `Consider backup: move_file("${params.destination}", "${params.destination}.bak")`
-            ]
-          }
-        };
+        return createUnifiedError(
+          ErrorCodes.DESTINATION_EXISTS,
+          'move_file',
+          { source: params.source, destination: params.destination },
+          '宛先ファイルが既に存在します'
+        );
       }
-    } catch {
+    } catch (error) {
       // 宛先ファイルが存在しない（正常）
-      destExists = false;
+      if ((error as any).code === 'ENOENT') {
+        // ファイルが存在しない場合は何もしない
+      } else {
+        return createUnifiedError(
+          ErrorCodes.ACCESS_DENIED,
+          'move_file',
+          { source: params.source, destination: params.destination },
+          '宛先パスにアクセスできません'
+        );
+      }
     }
     
     // 宛先ディレクトリが存在しない場合は作成
@@ -120,36 +173,21 @@ export async function moveFile(
     
     // 成功レスポンス
     return {
+      success: true,
       status: 'success',
       operation_info: {
-        source: sourcePath,
-        destination: destPath,
+        source: originalSource,
+        destination: originalDest,
         operation_type: getOperationType(sourcePath, destPath),
         size_bytes: sourceStats.size
       }
     };
     
   } catch (error) {
-    // エラーレスポンス
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    return {
-      status: 'error',
-      operation_info: {
-        source: params.source,
-        destination: params.destination,
-        operation_type: getOperationType(params.source, params.destination),
-        size_bytes: 0
-      },
-      issue_details: {
-        reason: errorMessage
-      },
-      alternatives: {
-        suggestions: getErrorSuggestions(errorMessage)
-      }
-    };
+    return createUnifiedErrorFromException(error, 'move_file', params.source);
   }
 }
+
 
 /**
  * ファイル移動の実行
@@ -175,7 +213,6 @@ async function performMove(sourcePath: string, destPath: string): Promise<void> 
 function getOperationType(sourcePath: string, destPath: string): 'move' | 'rename' | 'backup' {
   const sourceDir = path.dirname(sourcePath);
   const destDir = path.dirname(destPath);
-  const sourceBase = path.basename(sourcePath);
   const destBase = path.basename(destPath);
   
   // バックアップパターンの検出
@@ -193,61 +230,3 @@ function getOperationType(sourcePath: string, destPath: string): 'move' | 'renam
   return 'move';
 }
 
-/**
- * エラーに基づく提案生成
- */
-function getErrorSuggestions(errorMessage: string): string[] {
-  const suggestions: string[] = [];
-  
-  if (errorMessage.includes('EACCES') || errorMessage.includes('Permission denied')) {
-    suggestions.push(
-      'Check file permissions for both source and destination',
-      'Ensure the source file is not locked',
-      'Verify write permissions in destination directory',
-      'Close any programs that may be using the file'
-    );
-  } else if (errorMessage.includes('ENOENT') || errorMessage.includes('does not exist')) {
-    suggestions.push(
-      'Verify the source file path exists',
-      'Use list_directory to check available files',
-      'Check for typos in the file paths',
-      'Ensure the file hasn\'t been moved already'
-    );
-  } else if (errorMessage.includes('ENOSPC')) {
-    suggestions.push(
-      'Free up disk space on the destination drive',
-      'Move to a different drive with more space',
-      'Delete unnecessary files first',
-      'Consider compressing the file before moving'
-    );
-  } else if (errorMessage.includes('too large')) {
-    suggestions.push(
-      'Split the file into smaller parts',
-      'Use compression before moving',
-      'Copy the file manually using system tools',
-      'Increase the move size limit if appropriate'
-    );
-  } else if (errorMessage.includes('same')) {
-    suggestions.push(
-      'Provide different source and destination paths',
-      'Check if paths resolve to the same location',
-      'Use a different destination filename'
-    );
-  } else if (errorMessage.includes('already exists')) {
-    suggestions.push(
-      'Set overwrite_existing=true to replace the file',
-      'Choose a different destination filename',
-      'Move the existing file first',
-      'Check the existing file content with read_file'
-    );
-  } else {
-    suggestions.push(
-      'Check both source and destination paths',
-      'Verify you have appropriate permissions',
-      'Ensure paths are not too long',
-      'Try moving to a different location first'
-    );
-  }
-  
-  return suggestions;
-}

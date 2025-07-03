@@ -4,13 +4,18 @@
  */
 
 import { Router } from 'express';
+import path from 'path';
 import {
   searchFileContent,
   searchFileContentSimple
 } from '../controllers/search-controller.js';
 import { validate, commonRules } from '../middleware/validator.js';
+import { parseQueryParameters } from '../middleware/query-parser.js';
 
 const router = Router();
+
+// Apply query parameter parsing to all routes
+router.use(parseQueryParameters);
 
 /**
  * POST /content - Search file content (full featured)
@@ -58,6 +63,10 @@ router.post('/content',
       custom: (value: string) => {
         if (!value) return null;
         if (value.includes('\0')) return 'Directory path cannot contain null bytes';
+        // BREAKING CHANGE: Absolute path required
+        if (!path.isAbsolute(value)) {
+          return '検索ディレクトリは絶対パス指定が必要です（BREAKING CHANGE）';
+        }
         return null;
       }
     },
@@ -138,7 +147,15 @@ router.get('/content',
       field: 'directory',
       required: false,
       type: 'string',
-      maxLength: 2000
+      maxLength: 2000,
+      custom: (value: string) => {
+        if (!value) return null;
+        // BREAKING CHANGE: Absolute path required
+        if (!path.isAbsolute(value)) {
+          return '検索ディレクトリは絶対パス指定が必要です（BREAKING CHANGE）';
+        }
+        return null;
+      }
     },
     {
       field: 'extensions',

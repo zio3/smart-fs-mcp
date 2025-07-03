@@ -9,12 +9,12 @@ import { createReadStream } from 'fs';
 import * as readline from 'readline';
 import { 
   createSearchRegex, 
-  createFilePathRegex,
-  executeRegexWithTimeout,
-  findMatchesWithContext 
+  createFilePathRegex
+  // executeRegexWithTimeout,
+  // findMatchesWithContext 
 } from '../utils/regex-validator.js';
-import { isBinaryContent, getFileTypeFromExtension } from '../utils/helpers.js';
-import type { SearchResult } from './types.js';
+// import { isBinaryContent } from '../utils/helpers.js';
+// Note: Using any for search results since we removed legacy SearchResult type
 
 /**
  * バイナリファイル拡張子
@@ -74,8 +74,8 @@ export async function searchByFileName(
   rootDir: string,
   pattern: string,
   options: SearchEngineOptions
-): Promise<SearchResult[]> {
-  const results: SearchResult[] = [];
+): Promise<any[]> {
+  const results: any[] = [];
   const regex = createFilePathRegex(pattern, options.caseSensitive);
   const scannedCount = { value: 0 };
   
@@ -100,8 +100,8 @@ export async function searchByContent(
   rootDir: string,
   pattern: string,
   options: SearchEngineOptions
-): Promise<SearchResult[]> {
-  const results: SearchResult[] = [];
+): Promise<any[]> {
+  const results: any[] = [];
   const regex = createSearchRegex(pattern, options.caseSensitive, options.wholeWord);
   const scannedCount = { value: 0 };
   
@@ -127,8 +127,8 @@ export async function searchBoth(
   filePattern: string | null,
   contentPattern: string | null,
   options: SearchEngineOptions
-): Promise<SearchResult[]> {
-  const results: SearchResult[] = [];
+): Promise<any[]> {
+  const results: any[] = [];
   const fileRegex = filePattern ? createFilePathRegex(filePattern, options.caseSensitive) : null;
   const contentRegex = contentPattern ? createSearchRegex(contentPattern, options.caseSensitive, options.wholeWord) : null;
   const scannedCount = { value: 0 };
@@ -154,7 +154,7 @@ async function scanDirectory(
   dirPath: string,
   fileRegex: RegExp | null,
   contentRegex: RegExp | null,
-  results: SearchResult[],
+  results: any[],
   options: SearchEngineOptions,
   depth: number,
   scannedCount: { value: number },
@@ -169,7 +169,7 @@ async function scanDirectory(
   
   // 除外ディレクトリチェック
   const dirName = path.basename(dirPath);
-  if (options.excludeDirs.includes(dirName)) return;
+  if (options.excludeDirs && Array.isArray(options.excludeDirs) && options.excludeDirs.includes(dirName)) return;
   
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -226,8 +226,8 @@ async function searchFile(
   fileRegex: RegExp | null,
   contentRegex: RegExp | null,
   options: SearchEngineOptions,
-  searchType: 'filename' | 'content' | 'both'
-): Promise<SearchResult | null> {
+  _searchType: 'filename' | 'content' | 'both'
+): Promise<any | null> {
   try {
     const stats = await fs.stat(filePath);
     
@@ -248,11 +248,13 @@ async function searchFile(
     }
     
     // 内容検索
+    let matchedStrings: string[] | undefined;
     if (contentRegex) {
       const contentResult = await searchFileContent(filePath, contentRegex, options.maxMatchesPerFile);
       contentMatches = contentResult.matchCount;
       contentPreview = contentResult.preview;
       matchContext = contentResult.context;
+      matchedStrings = contentResult.matchedStrings;
     }
     
     // 結果がない場合はnull
@@ -267,12 +269,84 @@ async function searchFile(
       content_matches: contentMatches > 0 ? contentMatches : undefined,
       last_modified: stats.mtime.toISOString(),
       content_preview: contentPreview,
-      match_context: matchContext
+      match_context: matchContext,
+      matchedStrings: matchedStrings
     };
     
   } catch (error) {
     return null;
   }
+}
+
+/**
+ * マッチした部分を含む単語全体を抽出
+ */
+function extractWordContainingMatch(line: string, matchIndex: number, matchLength: number): string {
+  // 日本語文字の正規表現
+  const japaneseRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\u3400-\u4DBF]/;
+  
+  // マッチ開始位置と終了位置
+  const matchStart = matchIndex;
+  const matchEnd = matchIndex + matchLength;
+  
+  // 単語の構成文字かどうかを判定
+  function isWordChar(char: string | undefined): boolean {
+    if (!char) return false;
+    return /\w/.test(char) || japaneseRegex.test(char) || char === '-';
+  }
+  
+  // 単語の開始位置を探す
+  let wordStart = matchStart;
+  while (wordStart > 0) {
+    const prevChar = line[wordStart - 1];
+    const currentChar = line[wordStart];
+    
+    // 前の文字が単語構成文字で、現在の文字も単語構成文字なら継続
+    if (isWordChar(prevChar) && isWordChar(currentChar)) {
+      wordStart--;
+    } else {
+      break;
+    }
+  }
+  
+  // 単語の終了位置を探す
+  let wordEnd = matchEnd;
+  while (wordEnd < line.length) {
+    const currentChar = line[wordEnd];
+    
+    // 現在の文字が単語構成文字なら継続
+    if (isWordChar(currentChar)) {
+      wordEnd++;
+    } else {
+      break;
+    }
+  }
+  
+  // 抽出した単語
+  let word = line.substring(wordStart, wordEnd);
+  
+  // 長すぎる場合は省略（最大50文字）
+  const maxLength = 50;
+  if (word.length > maxLength) {
+    // マッチ部分を中心に前後を省略
+    const relativeMatchStart = matchStart - wordStart;
+    const relativeMatchEnd = matchEnd - wordStart;
+    
+    // マッチ部分の前後10文字ずつを確保
+    const contextBefore = 10;
+    const contextAfter = 10;
+    
+    const truncateStart = Math.max(0, relativeMatchStart - contextBefore);
+    const truncateEnd = Math.min(word.length, relativeMatchEnd + contextAfter);
+    
+    if (truncateStart > 0 || truncateEnd < word.length) {
+      word = (truncateStart > 0 ? '...' : '') + 
+             word.substring(truncateStart, truncateEnd) + 
+             (truncateEnd < word.length ? '...' : '');
+    }
+  }
+  
+  return word;
 }
 
 /**
@@ -282,11 +356,12 @@ async function searchFileContent(
   filePath: string,
   regex: RegExp,
   maxMatches: number
-): Promise<{ matchCount: number; preview?: string; context?: string[] }> {
+): Promise<{ matchCount: number; preview?: string; context?: string[]; matchedStrings?: string[] }> {
   return new Promise((resolve) => {
     let matchCount = 0;
     let preview: string | undefined;
     const contextLines: string[] = [];
+    const matchedStrings: string[] = [];
     const lines: string[] = [];
     let lineNumber = 0;
     
@@ -304,24 +379,40 @@ async function searchFileContent(
         lines.shift();
       }
       
-      if (regex.test(line)) {
-        matchCount++;
-        
-        // 最初のマッチをプレビューとして保存
-        if (!preview) {
-          preview = line.length > 100 ? line.substring(0, 100) + '...' : line;
+      // 実際のマッチ文字列を取得（単語単位で）
+      const globalRegex = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
+      const matches = line.matchAll(globalRegex);
+      let hasMatch = false;
+      
+      for (const match of matches) {
+        if (match[0] && match.index !== undefined) {
+          hasMatch = true;
+          matchCount++;
+          
+          // マッチした部分を含む単語全体を抽出
+          const wordMatch = extractWordContainingMatch(line, match.index, match[0].length);
+          matchedStrings.push(wordMatch);
+          
+          // 最初のマッチをプレビューとして保存
+          if (!preview) {
+            preview = line.length > 100 ? line.substring(0, 100) + '...' : line;
+          }
         }
         
+        if (matchCount >= maxMatches) {
+          break;
+        }
+      }
+      
+      if (hasMatch) {
         // コンテキストを保存（最大3セット）
         if (contextLines.length < 9) { // 3セット × 3行
           const startIdx = Math.max(0, lines.length - 3);
           for (let i = startIdx; i < lines.length; i++) {
-            contextLines.push(lines[i]);
+            const line = lines[i];
+            if (line !== undefined) contextLines.push(line);
           }
         }
-        
-        // グローバルフラグをリセット
-        regex.lastIndex = 0;
       }
       
       if (matchCount >= maxMatches) {
@@ -333,7 +424,8 @@ async function searchFileContent(
       resolve({
         matchCount,
         preview,
-        context: contextLines.length > 0 ? contextLines.slice(0, 9) : undefined
+        context: contextLines.length > 0 ? contextLines.slice(0, 9) : undefined,
+        matchedStrings: matchedStrings.length > 0 ? matchedStrings : undefined
       });
     });
     

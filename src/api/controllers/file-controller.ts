@@ -13,16 +13,17 @@ import { editFile } from '../../tools/edit-file.js';
 import { moveFile } from '../../tools/move-file.js';
 import { deleteFile } from '../../tools/delete-file.js';
 import { fileInfo } from '../../tools/file-info.js';
-import { createSuccessResponse, asyncHandler } from '../middleware/error-handler.js';
-import { sanitizePath } from '../middleware/validator.js';
+import { asyncHandler } from '../middleware/error-handler.js';
+// import { sanitizePath } from '../middleware/validator.js'; // No longer needed - using path validator
+import { validateAbsolutePath } from '../../utils/path-validator.js';
 import type { 
   ReadFileParams, 
   ReadFileForceParams, 
   WriteFileParams, 
   EditFileParams, 
-  MoveFileParams 
+  MoveFileParams,
+  DeleteFileParams
 } from '../../core/types.js';
-import type { DeleteFileParams } from '../../types/delete-operations.js';
 import type { FileInfoParams } from '../../tools/file-info.js';
 
 // Initialize services
@@ -33,100 +34,157 @@ const analyzer = new FileAnalyzer();
  * GET /api/files/info
  * Get detailed file information
  */
-export const getFileInfo = asyncHandler(async (req: Request, res: Response) => {
-  const path = sanitizePath(req.query.path as string);
-  const includeAnalysis = req.query.include_analysis !== 'false';
+export const getFileInfo = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const inputPath = req.query.path as string;
+  
+  // Absolute path validation (BREAKING CHANGE)
+  const pathValidation = validateAbsolutePath(inputPath, 'file_info');
+  if (!pathValidation.isValid && pathValidation.error) {
+    res.status(400).json(pathValidation.error);
+    return;
+  }
 
   const params: FileInfoParams = {
-    path,
-    include_analysis: includeAnalysis
+    path: pathValidation.absolutePath
   };
 
-  const result = await fileInfo(params, analyzer);
+  const result = await fileInfo(params);
 
-  res.json(createSuccessResponse(result, 'File information retrieved successfully', {
-    operation: 'file_info',
-    path: result.path
-  }));
+  // Handle unified response format - fileInfo already returns the correct format
+  res.json(result);
 });
 
 /**
  * GET /api/files/content
- * Read file content with safety checks
+ * Read file content with unified force parameter (LLM cognitive load reduction)
  */
-export const getFileContent = asyncHandler(async (req: Request, res: Response) => {
-  const path = sanitizePath(req.query.path as string);
+export const getFileContent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const inputPath = req.query.path as string;
+  const force = req.query.force === 'true';
   const encoding = req.query.encoding as string;
+  
+  // Absolute path validation (BREAKING CHANGE)
+  const pathValidation = validateAbsolutePath(inputPath, 'read_file');
+  if (!pathValidation.isValid && pathValidation.error) {
+    res.status(400).json(pathValidation.error);
+    return;
+  }
 
-  const params: ReadFileParams = {
-    path,
-    ...(encoding && { encoding: encoding as any })
-  };
+  try {
+    // Try normal read first (20KB limit)
+    const normalParams: ReadFileParams = {
+      path: pathValidation.absolutePath,
+      ...(encoding && { encoding: encoding as any })
+    };
 
-  const result = await readFile(params, safety, analyzer);
+    const normalResult = await readFile(normalParams, safety, analyzer);
+    
+    // If normal read succeeds, return result
+    if (normalResult.success) {
+      res.json(normalResult);
+      return;
+    }
 
-  res.json(createSuccessResponse(result, 'File content retrieved successfully', {
-    operation: 'read_file',
-    path: params.path,
-    status: result.status
-  }));
+    // If size exceeded and force=true, try force read
+    if (!normalResult.success && 'error' in normalResult && normalResult.error.code === 'file_too_large' && force) {
+      const forceParams: ReadFileForceParams = {
+        path: pathValidation.absolutePath,
+        acknowledge_risk: true,
+        ...(encoding && { encoding: encoding as any })
+      };
+
+      const forceResult = await readFileForce(forceParams, safety, analyzer);
+      
+      // Add warning to successful force read
+      if (forceResult.success && 'content' in forceResult) {
+        const fileStats = await import('fs/promises').then(fs => fs.stat(pathValidation.absolutePath));
+        const sizeKB = Math.round(fileStats.size / 1024);
+        
+        res.json({
+          ...forceResult,
+          warning: {
+            message: `中程度ファイル（${sizeKB} KB）を強制読み取りしました`,
+            size_kb: sizeKB,
+            estimated_tokens: Math.round(fileStats.size / 4) // Rough token estimation
+          }
+        });
+        return;
+      }
+      
+      res.json(forceResult);
+      return;
+    }
+
+    // If size exceeded but force=false, return the error as-is (already has suggestions)
+    if (!normalResult.success && 'error' in normalResult && normalResult.error.code === 'file_too_large') {
+      res.json(normalResult);
+      return;
+    }
+
+    // Other errors
+    res.status(400).json(normalResult);
+    return;
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      failedInfo: {
+        reason: 'unknown_error',
+        message: 'Unexpected error occurred',
+        solutions: []
+      }
+    });
+    return;
+  }
 });
 
-/**
- * GET /api/files/content/force
- * Force read file content bypassing normal limits
- */
-export const getFileContentForce = asyncHandler(async (req: Request, res: Response) => {
-  const path = sanitizePath(req.query.path as string);
-  const encoding = req.query.encoding as string;
-  const maxSizeMb = req.query.max_size_mb ? parseInt(req.query.max_size_mb as string, 10) : undefined;
-
-  const params: ReadFileForceParams = {
-    path,
-    acknowledge_risk: true, // API automatically acknowledges risk
-    ...(encoding && { encoding: encoding as any }),
-    ...(maxSizeMb && { max_size_mb: maxSizeMb })
-  };
-
-  const result = await readFileForce(params, safety, analyzer);
-
-  res.json(createSuccessResponse(result, 'File content retrieved with force read', {
-    operation: 'read_file_force',
-    path: params.path,
-    max_size_mb: params.max_size_mb
-  }));
-});
+// getFileContentForce removed - unified into getFileContent with force parameter
 
 /**
  * POST /api/files/content
- * Write content to a file
+ * Write content to a file (LLM-optimized)
  */
-export const writeFileContent = asyncHandler(async (req: Request, res: Response) => {
+export const writeFileContent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { path: rawPath, content, encoding } = req.body;
-  const path = sanitizePath(rawPath);
+  
+  // Absolute path validation (BREAKING CHANGE)
+  const pathValidation = validateAbsolutePath(rawPath, 'write_file');
+  if (!pathValidation.isValid && pathValidation.error) {
+    res.status(400).json(pathValidation.error);
+    return;
+  }
 
   const params: WriteFileParams = {
-    path,
+    path: pathValidation.absolutePath,
     content,
     ...(encoding && { encoding })
   };
 
   const result = await writeFile(params, safety);
 
-  res.json(createSuccessResponse(result, 'File written successfully', {
-    operation: 'write_file',
-    path: params.path,
-    size_bytes: result.file_info.size_bytes
-  }));
+  // Handle LLM-optimized response format
+  if (result.success) {
+    // Simplified success response
+    res.json({ success: true });
+  } else {
+    // Return failure response directly (LLM-optimized format)
+    res.status(400).json(result);
+  }
 });
 
 /**
  * PUT /api/files/edit
- * Edit file using literal or regex replacements
+ * Edit file using literal or regex replacements (LLM-optimized)
  */
-export const editFileContent = asyncHandler(async (req: Request, res: Response) => {
+export const editFileContent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { path: rawPath, edits, dry_run, preserve_formatting } = req.body;
-  const path = sanitizePath(rawPath);
+  
+  // Absolute path validation (BREAKING CHANGE)
+  const pathValidation = validateAbsolutePath(rawPath, 'edit_file');
+  if (!pathValidation.isValid && pathValidation.error) {
+    res.status(400).json(pathValidation.error);
+    return;
+  }
 
   // Convert simple edits format to full edit operations
   const processedEdits = Array.isArray(edits) ? edits.map((edit: any) => {
@@ -141,67 +199,109 @@ export const editFileContent = asyncHandler(async (req: Request, res: Response) 
   }) : edits;
 
   const params: EditFileParams = {
-    path,
+    path: pathValidation.absolutePath,
     edits: processedEdits,
-    ...(dry_run !== undefined && { dry_run }),
-    ...(preserve_formatting !== undefined && { preserve_formatting })
+    dry_run: dry_run,
+    preserve_formatting: preserve_formatting
   };
 
   const result = await editFile(params, safety, analyzer);
 
-  res.json(createSuccessResponse(result, 
-    dry_run ? 'File edit preview generated' : 'File edited successfully', {
-    operation: 'edit_file',
-    path: params.path,
-    dry_run: !!dry_run,
-    edits_count: params.edits.length
-  }));
+  // Handle LLM-optimized response format
+  if (result.success) {
+    // Return success data directly
+    res.json({
+      success: true,
+      file_path: params.path,
+      edits_applied: result.edit_summary?.successful_edits || 0,
+      dry_run: params.dry_run,
+      ...(result.diff_output && { diff_output: result.diff_output }),
+      ...(result.edit_summary && { 
+        changes_summary: `${result.edit_summary.successful_edits} edits applied`
+      })
+    });
+  } else {
+    // Return failure response directly (LLM-optimized format)
+    res.status(400).json(result);
+  }
 });
 
 /**
  * POST /api/files/move
- * Move or rename a file
+ * Move or rename a file (LLM-optimized)
  */
-export const moveFileLocation = asyncHandler(async (req: Request, res: Response) => {
+export const moveFileLocation = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { source: rawSource, destination: rawDestination, overwrite_existing } = req.body;
-  const source = sanitizePath(rawSource);
-  const destination = sanitizePath(rawDestination);
+  
+  // Absolute path validation for source (BREAKING CHANGE)
+  const sourceValidation = validateAbsolutePath(rawSource, 'move_file');
+  if (!sourceValidation.isValid && sourceValidation.error) {
+    res.status(400).json(sourceValidation.error);
+    return;
+  }
+  
+  // Absolute path validation for destination (BREAKING CHANGE)
+  const destValidation = validateAbsolutePath(rawDestination, 'move_file');
+  if (!destValidation.isValid && destValidation.error) {
+    res.status(400).json(destValidation.error);
+    return;
+  }
 
   const params: MoveFileParams = {
-    source,
-    destination,
+    source: sourceValidation.absolutePath,
+    destination: destValidation.absolutePath,
     ...(overwrite_existing !== undefined && { overwrite_existing })
   };
 
   const result = await moveFile(params, safety);
 
-  res.json(createSuccessResponse(result, 'File moved successfully', {
-    operation: 'move_file',
-    source: params.source,
-    destination: params.destination,
-    operation_type: result.operation_info.operation_type
-  }));
+  // Handle LLM-optimized response format
+  if (result.success) {
+    // Return success data directly
+    res.json({
+      success: true,
+      source_path: params.source,
+      destination_path: params.destination,
+      operation_type: result.operation_info?.operation_type || 'move',
+      file_size: result.operation_info?.size_bytes || 0,
+      overwritten_existing: result.operation_info?.operation_type === 'move' && 
+                           result.operation_info?.destination?.includes('overwrite')
+    });
+  } else {
+    // Return failure response directly (LLM-optimized format)
+    res.status(400).json(result);
+  }
 });
 
 /**
  * DELETE /api/files
- * Delete a file with safety checks
+ * Delete a file with safety checks (LLM-optimized)
  */
-export const deleteFileSafely = asyncHandler(async (req: Request, res: Response) => {
-  const path = sanitizePath(req.query.path as string || req.body.path);
+export const deleteFileSafely = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const inputPath = req.query.path as string || req.body.path;
+  
+  // Absolute path validation (BREAKING CHANGE)
+  const pathValidation = validateAbsolutePath(inputPath, 'delete_file');
+  if (!pathValidation.isValid && pathValidation.error) {
+    res.status(400).json(pathValidation.error);
+    return;
+  }
+  
   const force = req.query.force === 'true' || req.body.force === true;
 
   const params: DeleteFileParams = {
-    path,
+    path: pathValidation.absolutePath,
     ...(force && { force })
   };
 
   const result = await deleteFile(params);
 
-  res.json(createSuccessResponse(result, 'File deleted successfully', {
-    operation: 'delete_file',
-    path: params.path,
-    was_readonly: result.deleted_file.was_readonly,
-    importance: result.safety_info?.file_importance || 'normal'
-  }));
+  // Handle LLM-optimized response format
+  if (result.success) {
+    // Simplified success response
+    res.json({ success: true });
+  } else {
+    // Return failure response directly (LLM-optimized format)
+    res.status(400).json(result);
+  }
 });

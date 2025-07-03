@@ -40,7 +40,11 @@ export type SafetyViolationType =
   | 'PERMISSION_DENIED'
   | 'UNSAFE_FILE_TYPE'
   | 'TIMEOUT_RISK'
-  | 'PATH_TRAVERSAL';
+  | 'PATH_TRAVERSAL'
+  | 'FILE_NOT_FOUND'
+  | 'DIRECTORY_NOT_FOUND'
+  | 'INVALID_PATH'
+  | 'UNKNOWN_ERROR';
 
 /**
  * Basic file information
@@ -65,7 +69,7 @@ export interface FileInfo {
   isSymlink?: boolean;
   
   /** File permissions (readable, writable, executable) */
-  permissions?: {
+  permissions: {
     readable: boolean;
     writable: boolean;
     executable: boolean;
@@ -467,18 +471,12 @@ export interface ListDirectoryParams {
   
   /** Include hidden files */
   include_hidden?: boolean;
-  
-  /** Sort by criteria */
-  sort_by?: 'name' | 'size' | 'modified';
-  
-  /** Sort order */
-  sort_order?: 'asc' | 'desc';
 }
 
 /**
- * File information
+ * File information for directory listing (renamed to avoid conflicts)
  */
-export interface FileInfo {
+export interface DirectoryFileInfo {
   /** File name */
   name: string;
   
@@ -531,7 +529,7 @@ export interface DirectorySummary {
   /** Largest file info */
   largest_file?: {
     name: string;
-    size_bytes: number;
+    size: number;
   };
 }
 
@@ -599,94 +597,6 @@ export interface SearchContentParams {
   max_matches_per_file?: number;
 }
 
-/**
- * Search info
- */
-export interface SearchInfo {
-  /** Search pattern */
-  pattern: string;
-  
-  /** Search type */
-  search_type: string;
-  
-  /** Search directory */
-  directory: string;
-  
-  /** Total files scanned */
-  total_files_scanned: number;
-  
-  /** Search time in ms */
-  search_time_ms: number;
-}
-
-/**
- * Search result for individual file
- */
-export interface SearchResult {
-  /** File path */
-  file_path: string;
-  
-  /** File size in bytes */
-  file_size_bytes: number;
-  
-  /** Filename matches count */
-  filename_matches?: number;
-  
-  /** Content matches count */
-  content_matches?: number;
-  
-  /** Last modified timestamp */
-  last_modified: string;
-  
-  /** Content preview */
-  content_preview?: string;
-  
-  /** Match context lines */
-  match_context?: string[];
-}
-
-/**
- * Search summary
- */
-export interface SearchSummary {
-  /** Total matches found */
-  total_matches: number;
-  
-  /** Files with matches */
-  files_with_matches: number;
-  
-  /** Largest file in MB */
-  largest_file_mb?: number;
-  
-  /** File with most matches */
-  most_matches?: {
-    file_path: string;
-    match_count: number;
-  };
-  
-  /** Next action suggestions */
-  next_actions?: string[];
-}
-
-/**
- * Search content response
- */
-export interface SearchContentResponse {
-  /** Search information */
-  search_info: SearchInfo;
-  
-  /** Search results */
-  results: SearchResult[];
-  
-  /** Summary statistics */
-  summary: SearchSummary;
-  
-  /** Operation status */
-  status: 'success' | 'partial' | 'error';
-  
-  /** Warnings if any */
-  warnings?: string[];
-}
 
 /**
  * Tool parameters for write_file
@@ -739,6 +649,11 @@ export interface WriteFileResult {
 /**
  * Edit operation types
  */
+export interface SimpleEdit {
+  oldText: string;
+  newText: string;
+}
+
 export interface LiteralEdit {
   type: 'literal';
   old_text: string;
@@ -758,7 +673,7 @@ export interface DiffEdit {
   base_version_check?: boolean;
 }
 
-export type EditOperation = LiteralEdit | RegexEdit | DiffEdit;
+export type EditOperation = SimpleEdit | LiteralEdit | RegexEdit | DiffEdit;
 
 /**
  * Tool parameters for edit_file
@@ -892,24 +807,18 @@ export interface MoveFileResult {
 /**
  * Operation result wrapper
  */
-export interface OperationResult<T> {
-  /** Whether operation succeeded */
-  success: boolean;
+export type OperationResult<T = unknown> = {
+  status: 'success' | 'error' | 'warning';
   
   /** Result data if successful */
   data?: T;
   
-  /** Error information if failed */
-  error?: ErrorInfo;
+  /** Error message if failed */
+  error?: string;
   
-  /** Performance metrics */
-  metrics?: {
-    startTime: number;
-    endTime: number;
-    duration: number;
-    memoryUsed?: number;
-  };
-}
+  /** Warnings if any */
+  warnings?: string[];
+};
 
 /**
  * CLI-specific types
@@ -933,3 +842,626 @@ export namespace CLI {
     grade: 'A' | 'B' | 'C' | 'D' | 'F';
   }
 }
+
+/**
+ * Simplified Read File Response Types
+ * Simple success/failure structure for LLM-friendly responses
+ */
+
+/**
+ * Solution for resolving file read failures
+ */
+export interface Solution {
+  /** API method name */
+  method: string;
+  
+  /** Ready-to-use parameters */
+  params: Record<string, any>;
+  
+  /** LLM-friendly description */
+  description: string;
+}
+
+/**
+ * Simple successful file read response
+ */
+export interface SimpleReadFileSuccess {
+  success: true;
+  content: string;
+}
+
+
+
+/**
+ * Simple read file response type
+ */
+export type SimpleReadFileResponse = SimpleReadFileSuccess | import('../utils/unified-error-handler.js').UnifiedError;
+
+/**
+ * Simple Search Content Types
+ */
+
+/**
+ * Search match information
+ */
+export interface SearchMatch {
+  /** File path */
+  file: string;
+  
+  /** Number of matches in the file */
+  matchCount: number;
+  
+  /** File size in bytes */
+  fileSize: number;
+  
+  /** Extracted content keywords (deduplicated) */
+  contents: string[];
+}
+
+/**
+ * Successful search response
+ */
+export interface SearchContentSuccess {
+  success: true;
+  matches: SearchMatch[];
+  search_type: string;
+  search_stats: {
+    files_scanned: number;
+    files_with_matches: number;
+    total_matches: number;
+  };
+}
+
+/**
+ * Failed search response
+ */
+export interface SearchContentFailure {
+  success: false;
+  failedInfo: {
+    reason: string;
+    message: string;
+    solutions: Solution[];
+  };
+}
+
+/**
+ * Simple search content response type
+ */
+export type SimpleSearchContentResponse = SearchContentSuccess | SearchContentFailure;
+
+/**
+ * Enhanced Directory List API Types (LLM-Optimized)
+ */
+
+/**
+ * Enhanced directory listing parameters (absolute path required)
+ */
+export interface EnhancedListDirectoryParams {
+  /** Absolute directory path (required) */
+  path: string;
+  
+  /** File extensions to include */
+  extensions?: string[];
+  
+  /** Directory names to exclude */
+  exclude_dirs?: string[];
+  
+  /** Include hidden files (default: true) */
+  include_hidden?: boolean;
+  
+  /** Maximum files to display (default: 50, max: 200) */
+  max_files?: number;
+  
+  /** Maximum directories to display (default: 20, max: 50) */
+  max_directories?: number;
+}
+
+/**
+ * Enhanced file info with optimization for LLMs
+ */
+export interface EnhancedFileInfo {
+  /** File name */
+  name: string;
+  
+  /** File size in bytes */
+  size: number;
+  
+  /** File extension (without dot) */
+  ext?: string;
+  
+  /** Last modified timestamp (ISO string) */
+  modified: string;
+  
+  /** Whether file is hidden */
+  hidden: boolean;
+}
+
+/**
+ * Enhanced subdirectory info with directory count
+ */
+export interface EnhancedSubdirectoryInfo {
+  /** Directory name */
+  name: string;
+  
+  /** Number of files */
+  files: number;
+  
+  /** Number of directories */
+  directories: number;
+  
+  /** Last modified timestamp (ISO string) */
+  modified: string;
+  
+  /** Whether directory is hidden */
+  hidden: boolean;
+}
+
+/**
+ * LLM-optimized directory response (success)
+ */
+export interface LLMDirectorySuccess {
+  success: true;
+  
+  /** Directory path */
+  path: string;
+  
+  /** Files (limited to 50 max) */
+  files: EnhancedFileInfo[];
+  
+  /** Subdirectories */
+  directories: EnhancedSubdirectoryInfo[];
+  
+  /** Summary counts */
+  summary: {
+    /** Total files shown */
+    file_count: number;
+    
+    /** Total directories shown */
+    directory_count: number;
+    
+    /** Total size of shown files */
+    total_size: number;
+    
+    /** Whether results were limited */
+    limited?: boolean;
+    
+    /** Additional files not shown */
+    additional_files?: number;
+    
+    /** Hidden files excluded */
+    hidden_excluded?: number;
+  };
+}
+
+/**
+ * LLM-optimized directory response (failure)
+ */
+export interface LLMDirectoryFailure {
+  success: false;
+  failedInfo: {
+    reason: 'path_not_absolute' | 'not_found' | 'permission_denied' | 'too_many_files' | 'invalid_path_format';
+    message: string;
+    solutions: Solution[];
+    current_directory?: string;
+    directory_info?: {
+      total_files?: number;
+      suggested_filters?: string[];
+    };
+    directory_analysis?: {
+      total_files: number;
+      file_types: Array<{
+        ext: string;
+        count: number;
+        percentage: number;
+      }>;
+      hidden_files: number;
+    };
+  };
+}
+
+/**
+ * LLM-optimized directory response type
+ */
+export type LLMOptimizedDirectoryResponse = LLMDirectorySuccess | LLMDirectoryFailure;
+
+/**
+ * Unified File Operations LLM Optimization Types
+ * Breaking changes: complete replacement of existing error response formats
+ */
+
+/**
+ * File operation failure reasons
+ */
+export type FileOperationFailureReason = 
+  | "file_not_found"
+  | "permission_denied" 
+  | "pattern_not_found"      // edit専用
+  | "destination_exists"     // move専用
+  | "readonly_file"          // delete専用
+  | "file_in_use"           // delete専用  
+  | "path_not_absolute"     // 共通
+  | "invalid_path"
+  | "operation_failed";
+
+/**
+ * File status information for failure responses
+ */
+export interface FileStatusInfo {
+  /** File path */
+  path: string;
+  
+  /** Whether file exists */
+  exists: boolean;
+  
+  /** Whether file is readable */
+  readable?: boolean;
+  
+  /** Whether file is writable */
+  writable?: boolean;
+  
+  /** File size in bytes */
+  size?: number;
+  
+  /** Last modified timestamp (ISO string) */
+  modified?: string;
+  
+  /** First few lines of content for preview */
+  content_preview?: string[];
+}
+
+/**
+ * Operation context for providing specific failure details
+ */
+export interface OperationContext {
+  /** Type of operation that failed */
+  operation_type: "edit" | "move" | "delete";
+  
+  /** Target file path */
+  target_file: string;
+  
+  /** Search patterns (edit operations) */
+  search_patterns?: string[];
+  
+  /** Destination path (move operations) */
+  destination_path?: string;
+  
+  /** Conflict information */
+  conflicts?: ConflictInfo[];
+}
+
+/**
+ * Conflict information for move operations
+ */
+export interface ConflictInfo {
+  /** Type of conflict */
+  type: "file_exists" | "permission_denied" | "invalid_destination";
+  
+  /** Conflicting path */
+  path: string;
+  
+  /** Size difference in bytes */
+  size_difference?: number;
+  
+  /** Age difference description */
+  age_difference?: string;
+  
+  /** Additional conflict details */
+  details?: string;
+}
+
+/**
+ * Solution with priority for failure recovery
+ */
+export interface PrioritizedSolution extends Solution {
+  /** Solution priority */
+  priority: "high" | "medium" | "low";
+}
+
+/**
+ * Operation preview for complex operations
+ */
+export interface OperationPreview {
+  /** Preview of what will happen */
+  description: string;
+  
+  /** Files that will be affected */
+  affected_files: string[];
+  
+  /** Estimated operation size */
+  estimated_changes: number;
+  
+  /** Warnings about the operation */
+  warnings?: string[];
+}
+
+/**
+ * Unified LLM-optimized file operation response
+ */
+export interface LLMOptimizedFileOperationResponse {
+  /** Operation success status */
+  success: boolean;
+  
+  /** Success data (varies by operation) */
+  data?: any;
+  
+  /** Failure information with actionable solutions */
+  failedInfo?: {
+    /** Failure reason category */
+    reason: FileOperationFailureReason;
+    
+    /** Human-readable error message */
+    message: string;
+    
+    /** File status information */
+    file_status?: FileStatusInfo;
+    
+    /** Operation context and details */
+    operation_context?: OperationContext;
+    
+    /** Actionable solutions with priorities */
+    solutions: PrioritizedSolution[];
+    
+    /** Operation preview (for complex cases) */
+    preview?: OperationPreview;
+  };
+}
+
+/**
+ * Edit operation success response data
+ */
+export interface EditOperationSuccess {
+  /** File path that was edited */
+  file_path: string;
+  
+  /** Number of successful edits */
+  edits_applied: number;
+  
+  /** Git-style diff of changes */
+  diff_output?: string;
+  
+  /** File size after editing */
+  new_file_size: number;
+  
+  /** Brief summary of changes */
+  changes_summary: string;
+}
+
+/**
+ * Move operation success response data
+ */
+export interface MoveOperationSuccess {
+  /** Original file path */
+  source_path: string;
+  
+  /** New file path */
+  destination_path: string;
+  
+  /** Operation type performed */
+  operation_type: "move" | "rename" | "copy";
+  
+  /** File size */
+  file_size: number;
+  
+  /** Whether any existing file was overwritten */
+  overwritten_existing: boolean;
+}
+
+/**
+ * Delete file parameters (LLM-optimized)
+ */
+export interface DeleteFileParams {
+  /** File path to delete (must be absolute) */
+  path: string;
+  
+  /** Force deletion of read-only files */
+  force?: boolean;
+}
+
+/**
+ * Delete operation simplified success response
+ */
+export interface DeleteOperationSuccess {
+  /** Always true for successful deletions */
+  success: true;
+}
+
+/**
+ * WriteFile API LLM-Optimized Types
+ */
+
+/**
+ * WriteFile failure reasons
+ */
+export type WriteFileFailureReason = 
+  | "path_not_absolute"
+  | "directory_creation_failed" 
+  | "permission_denied"
+  | "file_exists_warning"
+  | "content_too_large"
+  | "operation_failed";
+
+/**
+ * WriteFile success response (simplified)
+ */
+export interface WriteFileSuccess {
+  /** Always true for successful writes */
+  success: true;
+  /** Number of bytes written */
+  bytes_written: number;
+}
+
+/**
+ * WriteFile failure response with actionable solutions
+ */
+export interface WriteFileFailure {
+  success: false;
+  failedInfo: {
+    /** Failure reason category */
+    reason: WriteFileFailureReason;
+    
+    /** Human-readable error message */
+    message: string;
+    
+    /** Provided path that caused the error */
+    provided_path?: string;
+    
+    /** Missing directory that couldn't be created */
+    missing_directory?: string;
+    
+    /** Directory creation error details */
+    creation_error?: string;
+    
+    /** Target path for permission errors */
+    target_path?: string;
+    
+    /** Existing file information */
+    existing_file?: string;
+    
+    /** Existing file size */
+    existing_size?: number;
+    
+    /** Content size that exceeded limits */
+    content_size?: number;
+    
+    /** Maximum allowed size */
+    max_size?: number;
+    
+    /** Actionable solutions with priorities */
+    solutions: PrioritizedSolution[];
+  };
+}
+
+/**
+ * WriteFile unified response type
+ */
+export type WriteFileUnifiedResponse = WriteFileSuccess | WriteFileFailure;
+
+/**
+ * Directory Delete API LLM-Optimized Types
+ */
+
+/**
+ * Directory Delete failure reasons
+ */
+export type DirectoryDeleteFailureReason = 
+  | "path_not_absolute"
+  | "directory_not_empty"
+  | "permission_denied"
+  | "directory_not_found"
+  | "directory_in_use"
+  | "operation_failed";
+
+/**
+ * Directory Delete success response (simplified)
+ */
+export interface DirectoryDeleteSuccess {
+  /** Always true for successful deletions */
+  success: true;
+}
+
+/**
+ * Directory Delete failure response with actionable solutions
+ */
+export interface DirectoryDeleteFailure {
+  success: false;
+  failedInfo: {
+    /** Failure reason category */
+    reason: DirectoryDeleteFailureReason;
+    
+    /** Human-readable error message */
+    message: string;
+    
+    /** Provided path that caused the error */
+    provided_path?: string;
+    
+    /** Number of files in directory (for not_empty) */
+    file_count?: number;
+    
+    /** Number of subdirectories (for not_empty) */
+    subdirectory_count?: number;
+    
+    /** Target path for permission errors */
+    target_path?: string;
+    
+    /** Process or application using the directory */
+    blocking_process?: string;
+    
+    /** Sample of files/dirs preventing deletion */
+    sample_contents?: string[];
+    
+    /** Actionable solutions with priorities */
+    solutions: PrioritizedSolution[];
+  };
+}
+
+/**
+ * Directory Delete unified response type
+ */
+export type DirectoryDeleteUnifiedResponse = DirectoryDeleteSuccess | DirectoryDeleteFailure;
+
+/**
+ * Unified Delete API Types (Simplified)
+ * Common response structure for both file and directory deletion
+ */
+
+/**
+ * Delete success response (simplified)
+ */
+export interface DeleteSuccess {
+  /** Always true for successful deletions */
+  success: true;
+}
+
+/**
+ * Delete failure reasons
+ */
+export type DeleteFailureReason = 
+  | 'not_found'
+  | 'permission_denied'
+  | 'in_use'
+  | 'not_empty'
+  | 'read_only'
+  | 'invalid_target'
+  | 'unknown_error';
+
+/**
+ * Target information for delete operations
+ */
+export interface DeleteTargetInfo {
+  /** Path of the target */
+  path: string;
+  /** Type of target */
+  type: 'file' | 'directory';
+  /** Whether target exists */
+  exists: boolean;
+}
+
+/**
+ * Delete failure response with actionable solutions
+ */
+export interface DeleteFailure {
+  success: false;
+  failedInfo: {
+    /** Failure reason category */
+    reason: DeleteFailureReason;
+    
+    /** Human-readable error message */
+    message: string;
+    
+    /** Target information (minimal) */
+    target_info?: DeleteTargetInfo;
+    
+    /** Actionable solutions with executable parameters */
+    solutions: Solution[];
+  };
+}
+
+/**
+ * Unified delete response type
+ */
+export type UnifiedDeleteResponse = DeleteSuccess | DeleteFailure;
+
+/**
+ * Subset of fs/promises for dependency injection
+ */
+export interface FileSystemPromises extends Pick<typeof import('fs/promises'), 'stat' | 'open' | 'access' | 'constants'> {}

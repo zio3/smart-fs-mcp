@@ -6,7 +6,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
-import { SAFETY_LIMITS } from '../utils/constants.js';
+// import { SAFETY_LIMITS } from '../utils/constants.js';
 
 /**
  * ディレクトリ移動パラメータ
@@ -73,7 +73,7 @@ export interface MoveDirectoryResult {
 function determineOperationType(source: string, destination: string): 'move' | 'rename' | 'backup' {
   const sourceDir = path.dirname(source);
   const destDir = path.dirname(destination);
-  const sourceName = path.basename(source);
+  // const sourceName = path.basename(source);
   const destName = path.basename(destination);
   
   // 同じディレクトリ内での操作
@@ -221,7 +221,9 @@ async function previewMove(
 async function executeMove(
   sourcePath: string,
   destinationPath: string,
-  overwriteExisting: boolean
+  overwriteExisting: boolean,
+  originalSource?: string,
+  originalDest?: string
 ): Promise<MoveDirectoryResult> {
   const startTime = Date.now();
   
@@ -276,8 +278,8 @@ async function executeMove(
     return {
       status: 'success',
       operation_info: {
-        source: sourcePath,
-        destination: destinationPath,
+        source: originalSource || sourcePath,
+        destination: originalDest || destinationPath,
         resolved_source: sourcePath,
         resolved_destination: destinationPath,
         operation_type: operationType,
@@ -294,8 +296,8 @@ async function executeMove(
     return {
       status: 'error',
       operation_info: {
-        source: sourcePath,
-        destination: destinationPath,
+        source: originalSource || sourcePath,
+        destination: originalDest || destinationPath,
         resolved_source: sourcePath,
         resolved_destination: destinationPath,
         operation_type: 'move',
@@ -349,7 +351,7 @@ export async function moveDirectory(params: MoveDirectoryParams): Promise<MoveDi
     if (dry_run) {
       return await previewMove(resolvedSource, resolvedDestination, overwrite_existing);
     } else {
-      return await executeMove(resolvedSource, resolvedDestination, overwrite_existing);
+      return await executeMove(resolvedSource, resolvedDestination, overwrite_existing, sourcePath, destinationPath);
     }
     
   } catch (error) {

@@ -55,14 +55,16 @@ class SmartFilesystemAPI {
    * Setup routes
    */
   private setupRoutes(): void {
-    // Health check endpoint
-    this.app.get('/health', (req, res) => {
+    // Health check endpoint (LLM-optimized)
+    this.app.get('/health', (_req, res) => {
       res.json({
-        success: true,
-        data: {
-          status: 'healthy',
-          timestamp: new Date().toISOString(),
-          version: '1.0.0'
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        version: '1.0.0',
+        uptime: process.uptime(),
+        memory: {
+          used_mb: Math.round(process.memoryUsage().heapUsed / 1048576),
+          total_mb: Math.round(process.memoryUsage().heapTotal / 1048576)
         }
       });
     });
@@ -71,9 +73,90 @@ class SmartFilesystemAPI {
     this.app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec, {
       customSiteTitle: 'Smart Filesystem MCP API',
       customfavIcon: '/favicon.ico',
-      customCss: '.swagger-ui .topbar { display: none }',
+      customCss: `
+        .swagger-ui .topbar { display: none }
+        .api-header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 20px;
+          margin-bottom: 20px;
+          border-radius: 8px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .api-header h1 {
+          margin: 0 0 10px 0;
+          font-size: 24px;
+          font-weight: 600;
+        }
+        .api-header p {
+          margin: 0 0 15px 0;
+          opacity: 0.9;
+        }
+        .spec-links {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .spec-links a {
+          color: white;
+          text-decoration: none;
+          padding: 8px 12px;
+          background: rgba(255,255,255,0.2);
+          border-radius: 4px;
+          font-size: 12px;
+          font-family: monospace;
+          transition: background 0.2s;
+        }
+        .spec-links a:hover {
+          background: rgba(255,255,255,0.3);
+          text-decoration: underline;
+        }
+        .swagger-ui .info {
+          margin-top: 0;
+        }
+      `,
+      customCssUrl: '',
+      customJs: [
+        // カスタムヘッダーとダウンロードリンクを追加
+        `
+        window.addEventListener('DOMContentLoaded', function() {
+          setTimeout(function() {
+            const swaggerContainer = document.querySelector('.swagger-ui');
+            if (swaggerContainer && !document.querySelector('.api-header')) {
+              const header = document.createElement('div');
+              header.className = 'api-header';
+              header.innerHTML = \`
+                <h1>🚀 Smart Filesystem MCP API</h1>
+                <p>LLM-optimized filesystem operations with comprehensive safety controls</p>
+                <div class="spec-links">
+                  <span>📋 OpenAPI Specification:</span>
+                  <a href="/openapi.json" target="_blank" rel="noopener">📄 JSON Format</a>
+                  <a href="/swagger.json" target="_blank" rel="noopener">🔄 Swagger Compatible</a>
+                  <a href="/api/openapi.json" target="_blank" rel="noopener">🌐 API Endpoint</a>
+                </div>
+              \`;
+              swaggerContainer.insertBefore(header, swaggerContainer.firstChild);
+            }
+          }, 100);
+        });
+        `
+      ],
       swaggerOptions: {
         persistAuthorization: true,
+        displayRequestDuration: true,
+        filter: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+        urls: [
+          {
+            url: '/openapi.json',
+            name: 'OpenAPI JSON'
+          },
+          {
+            url: '/swagger.json', 
+            name: 'Swagger JSON'
+          }
+        ]
       }
     }));
 
@@ -81,26 +164,49 @@ class SmartFilesystemAPI {
     this.app.use('/api', apiRoutes);
 
     // Root endpoint - redirect to API docs
-    this.app.get('/', (req, res) => {
+    this.app.get('/', (_req, res) => {
       res.redirect('/api-docs');
     });
 
-    // 404 handler
+    // Root-level OpenAPI endpoints for convenience
+    this.app.get('/openapi.json', (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.json(openApiSpec);
+    });
+
+    this.app.get('/swagger.json', (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.json(openApiSpec);
+    });
+
+    // 404 handler (BREAKING CHANGE: failedInfo format only)
     this.app.use('*', (req, res) => {
       res.status(404).json({
         success: false,
-        error: {
-          code: 'NOT_FOUND',
+        failedInfo: {
+          reason: 'route_not_found',
           message: `Route ${req.method} ${req.originalUrl} not found`,
-          suggestions: [
-            'Check the API documentation at /api-docs',
-            'Verify the request method and URL',
-            'See available endpoints in the OpenAPI spec'
-          ]
-        },
-        meta: {
-          timestamp: new Date().toISOString(),
-          version: '1.0.0'
+          solutions: [
+            {
+              method: 'check_documentation',
+              params: { url: '/api-docs' },
+              description: 'SwaggerUIで利用可能なエンドポイントを確認',
+              priority: 'high'
+            },
+            {
+              method: 'api_info',
+              params: { endpoint: '/api' },
+              description: 'API情報エンドポイントで利用可能なルートを確認',
+              priority: 'medium'
+            },
+            {
+              method: 'health_check',
+              params: { endpoint: '/health' },
+              description: 'サーバーの動作状況を確認',
+              priority: 'low'
+            }
+          ],
+          error_code: 'NOT_FOUND'
         }
       });
     });
@@ -368,7 +474,7 @@ class SmartFilesystemAPI {
 }
 
 // Start server if run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (true) {
   const server = new SmartFilesystemAPI();
   
   // Graceful shutdown handling (cross-platform)

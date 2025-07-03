@@ -104,7 +104,7 @@ function validateField(value: any, rule: ValidationRule): string | null {
  * Create validation middleware
  */
 export function validate(rules: ValidationRule[]) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: Request, _res: Response, next: NextFunction) => {
     const errors: { field: string; message: string; value?: any }[] = [];
     
     // Combine query, body, and params for validation
@@ -125,7 +125,7 @@ export function validate(rules: ValidationRule[]) {
 
     if (errors.length > 0) {
       const validationError = new ValidationError(
-        errors[0].field,
+        errors[0]?.field || 'unknown',
         errors.map(e => e.message).join('; ')
       );
       return next(validationError);
@@ -162,6 +162,34 @@ export const commonRules = {
     }
   }),
 
+  absoluteFilePath: (required = true): ValidationRule => ({
+    field: 'path',
+    required,
+    type: 'string',
+    minLength: 1,
+    maxLength: 2000,
+    custom: (value: string) => {
+      if (!value) return null;
+      
+      // Check for null bytes (security)
+      if (value.includes('\0')) {
+        return 'File path cannot contain null bytes';
+      }
+      
+      // Basic path traversal check
+      if (value.includes('..')) {
+        return 'Path traversal attempts are not allowed';
+      }
+      
+      // BREAKING CHANGE: Absolute path required
+      if (!path.isAbsolute(value)) {
+        return 'Path must be absolute (e.g., "C:\\Users\\..." or "/home/...") - breaking change: relative paths no longer supported';
+      }
+      
+      return null;
+    }
+  }),
+
   sourceAndDestination: (): ValidationRule[] => [
     {
       field: 'source',
@@ -184,6 +212,41 @@ export const commonRules = {
       custom: (value: string) => {
         if (value.includes('\0')) return 'Destination path cannot contain null bytes';
         if (value.includes('..')) return 'Path traversal attempts are not allowed';
+        return null;
+      }
+    }
+  ],
+
+  absoluteSourceAndDestination: (): ValidationRule[] => [
+    {
+      field: 'source',
+      required: true,
+      type: 'string',
+      minLength: 1,
+      maxLength: 2000,
+      custom: (value: string) => {
+        if (value.includes('\0')) return 'Source path cannot contain null bytes';
+        if (value.includes('..')) return 'Path traversal attempts are not allowed';
+        // BREAKING CHANGE: Absolute path required
+        if (!path.isAbsolute(value)) {
+          return 'Source path must be absolute (breaking change)';
+        }
+        return null;
+      }
+    },
+    {
+      field: 'destination',
+      required: true,
+      type: 'string',
+      minLength: 1,
+      maxLength: 2000,
+      custom: (value: string) => {
+        if (value.includes('\0')) return 'Destination path cannot contain null bytes';
+        if (value.includes('..')) return 'Path traversal attempts are not allowed';
+        // BREAKING CHANGE: Absolute path required
+        if (!path.isAbsolute(value)) {
+          return 'Destination path must be absolute (breaking change)';
+        }
         return null;
       }
     }

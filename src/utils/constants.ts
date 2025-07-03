@@ -7,7 +7,11 @@
  * Safety limits for file operations
  */
 export const SAFETY_LIMITS = {
-  // File size limits - increased for simple-first approach
+  // File size limits - LLM cognitive load reduction (KB units)
+  NORMAL_READ_LIMIT_KB: parseInt(process.env.NORMAL_READ_LIMIT_KB || '20'),     // 20KB default normal read
+  FORCE_READ_LIMIT_KB: parseInt(process.env.FORCE_READ_LIMIT_KB || '256'),      // 256KB default force read
+  
+  // Legacy limits (still used by some tools)
   MAX_FILE_SIZE: 1024 * 1024,                    // 1MB default max file size
   MAX_FORCE_READ_SIZE: 50 * 1024 * 1024,         // 50MB absolute maximum
   
@@ -23,10 +27,13 @@ export const SAFETY_LIMITS = {
   // Token estimation limits
   MAX_TOKEN_ESTIMATE: 100000,                    // ~400KB of text content
   WARNING_TOKEN_ESTIMATE: 50000,                 // Warning threshold
+  SAFE_TOKEN_ESTIMATE: 25000,                    // Safe threshold for strict mode
   
   // Preview limits for error responses
   DEFAULT_PREVIEW_LINES: 20,                     // Lines shown in error preview
   DEFAULT_TAIL_LINES: 5,                         // Tail lines in error preview
+  MAX_PREVIEW_SIZE: 64 * 1024,                   // 64KB max preview size
+  MAX_INLINE_SIZE: 8 * 1024,                     // 8KB max inline display
   
   // Character limits
   MAX_LINE_LENGTH: 2000,                         // Maximum characters per line

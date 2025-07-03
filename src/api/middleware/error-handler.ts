@@ -1,25 +1,22 @@
 /**
- * Smart Filesystem MCP API - Error Handler
- * Centralized error handling middleware for Express API
+ * Smart Filesystem MCP API - Unified Error Handler
+ * Centralized error handling middleware using failedInfo format
  */
 
 import { Request, Response, NextFunction } from 'express';
+import type { PrioritizedSolution } from '../../core/types.js';
 
 /**
- * Standard API error response format
+ * Unified error response format (matching MCP tools)
  */
-export interface ApiErrorResponse {
+export interface UnifiedErrorResponse {
   success: false;
-  error: {
-    code: string;
+  failedInfo: {
+    reason: string;
     message: string;
-    suggestions?: string[];
-    details?: any;
-  };
-  meta: {
-    timestamp: string;
-    version: string;
-    requestId?: string;
+    solutions: PrioritizedSolution[];
+    error_code?: string;
+    details?: unknown;
   };
 }
 
@@ -60,55 +57,171 @@ const ERROR_STATUS_MAP: Record<string, number> = {
 };
 
 /**
- * Generate error suggestions based on error type
+ * Map error codes to failedInfo reasons
  */
-function generateErrorSuggestions(error: any): string[] {
-  const suggestions: string[] = [];
-  
-  if (error.code === 'ENOENT') {
-    suggestions.push('Verify the file or directory path exists');
-    suggestions.push('Check for typos in the path');
-    suggestions.push('Use absolute paths to avoid confusion');
-  } else if (error.code === 'EACCES' || error.code === 'EPERM') {
-    suggestions.push('Check file permissions');
-    suggestions.push('Ensure the file is not locked by another process');
-    suggestions.push('Try using force=true for read-only files');
-  } else if (error.code === 'EISDIR') {
-    suggestions.push('Use directory operations for directories');
-    suggestions.push('Check that the path points to a file, not a directory');
-  } else if (error.code === 'ENOTDIR') {
-    suggestions.push('Use file operations for files');
-    suggestions.push('Check that the path points to a directory, not a file');
-  } else if (error.code === 'EEXIST') {
-    suggestions.push('File or directory already exists');
-    suggestions.push('Use overwrite=true to replace existing files');
-    suggestions.push('Choose a different destination path');
-  } else if (error.message.includes('Size exceeded')) {
-    suggestions.push('Use read_file_force with acknowledge_risk=true');
-    suggestions.push('Increase the maxSize parameter');
-    suggestions.push('Process the file in smaller chunks');
-  } else if (error.message.includes('Binary file')) {
-    suggestions.push('This file contains binary data');
-    suggestions.push('Use file_info to get metadata instead');
-    suggestions.push('Consider if this file should be read as text');
-  } else if (error.name === 'SecurityError') {
-    suggestions.push('Path is outside allowed directories');
-    suggestions.push('Use list_allowed_dirs to see accessible paths');
-    suggestions.push('Check the server configuration');
+function mapErrorToReason(error: unknown): string {
+  if (typeof error !== 'object' || error === null) {
+    return 'unknown_error';
   }
+
+  const err = error as Record<string, any>;
   
-  // Generic suggestions
-  suggestions.push('Check the API documentation at /api-docs');
-  suggestions.push('Verify the request parameters and format');
+  if (err.code === 'ENOENT') return 'not_found';
+  if (err.code === 'EACCES' || err.code === 'EPERM') return 'permission_denied';
+  if (err.code === 'VALIDATION_ERROR') return 'validation_error';
+  if (err.code === 'SIZE_EXCEEDED') return 'size_exceeded';
+  if (err.code === 'BINARY_FILE_DETECTED') return 'binary_file';
+  if (err.name === 'SecurityError') return 'permission_denied';
   
-  return suggestions;
+  return 'unknown_error';
 }
 
 /**
- * Main error handling middleware
+ * Generate LLM-optimized solutions based on error type
+ */
+function generateErrorSolutions(error: unknown, req: Request): PrioritizedSolution[] {
+  const solutions: PrioritizedSolution[] = [];
+  
+  if (typeof error !== 'object' || error === null) {
+    solutions.push({
+      method: 'check_documentation',
+      params: { url: '/api-docs' },
+      description: 'APIドキュメントでエラーの詳細を確認',
+      priority: 'high'
+    });
+    return solutions;
+  }
+
+  const err = error as Record<string, any>;
+
+  if (err.code === 'ENOENT') {
+    solutions.push(
+      {
+        method: 'list_directory',
+        params: { path: '/' },
+        description: 'ファイルやディレクトリの存在を確認',
+        priority: 'high'
+      },
+      {
+        method: 'file_info',
+        params: { path: req.query.path || req.body?.path || '/tmp/example.txt' },
+        description: 'パスの詳細情報を取得',
+        priority: 'medium'
+      }
+    );
+  } else if (err.code === 'EACCES' || err.code === 'EPERM') {
+    solutions.push(
+      {
+        method: 'file_info',
+        params: { path: req.query.path || req.body?.path || '/tmp/example.txt' },
+        description: 'ファイルの権限情報を確認',
+        priority: 'high'
+      },
+      {
+        method: 'list_allowed_dirs',
+        params: {},
+        description: 'アクセス可能なディレクトリを確認',
+        priority: 'medium'
+      }
+    );
+  } else if (err.code === 'EISDIR') {
+    solutions.push({
+      method: 'list_directory',
+      params: { path: req.query.path || req.body?.path || '/tmp' },
+      description: 'ディレクトリ操作用のAPIを使用',
+      priority: 'high'
+    });
+  } else if (err.code === 'ENOTDIR') {
+    solutions.push({
+      method: 'file_info',
+      params: { path: req.query.path || req.body?.path || '/tmp/example.txt' },
+      description: 'ファイル操作用のAPIを使用',
+      priority: 'high'
+    });
+  } else if (err.code === 'EEXIST') {
+    const path = req.query.path || req.body?.path || req.body?.destination;
+    solutions.push(
+      {
+        method: req.method === 'POST' && req.path.includes('files') ? 'write_file' : 'mkdir',
+        params: { 
+          path, 
+          ...(req.method === 'POST' && req.path.includes('files') ? { overwrite: true } : {})
+        },
+        description: '既存ファイルを上書きして実行',
+        priority: 'high'
+      },
+      {
+        method: 'file_info',
+        params: { path },
+        description: '既存ファイルの情報を確認',
+        priority: 'medium'
+      }
+    );
+  } else if (typeof err.message === 'string' && err.message.includes('Size exceeded')) {
+    solutions.push(
+      {
+        method: 'read_file',
+        params: { 
+          path: req.query.path || req.body?.path || '/tmp/example.txt',
+          force: true
+        },
+        description: '制限を無視して強制読み取り',
+        priority: 'high'
+      },
+      {
+        method: 'search_content',
+        params: { 
+          file_pattern: 'target_file',
+          content_pattern: 'function.*|class.*|export.*'
+        },
+        description: '特定パターンのみ検索',
+        priority: 'medium'
+      }
+    );
+  } else if (typeof err.message === 'string' && err.message.includes('Binary file')) {
+    solutions.push(
+      {
+        method: 'file_info',
+        params: { path: req.query.path || req.body?.path || '/tmp/example.bin' },
+        description: 'バイナリファイルのメタデータを取得',
+        priority: 'high'
+      }
+    );
+  } else if (err.name === 'SecurityError') {
+    solutions.push(
+      {
+        method: 'list_allowed_dirs',
+        params: {},
+        description: 'アクセス可能なディレクトリ一覧を確認',
+        priority: 'high'
+      },
+      {
+        method: 'check_documentation',
+        params: { url: '/api-docs' },
+        description: 'セキュリティ制限についてドキュメントを確認',
+        priority: 'medium'
+      }
+    );
+  }
+  
+  // Generic fallback solution
+  if (solutions.length === 0) {
+    solutions.push({
+      method: 'check_documentation',
+      params: { url: '/api-docs' },
+      description: 'SwaggerUIでAPIの詳細を確認',
+      priority: 'high'
+    });
+  }
+
+  return solutions;
+}
+
+/**
+ * Main error handling middleware (BREAKING CHANGE: failedInfo format only)
  */
 export function errorHandler(
-  error: any,
+  error: unknown,
   req: Request,
   res: Response,
   next: NextFunction
@@ -126,60 +239,64 @@ export function errorHandler(
   const timestamp = new Date().toISOString();
   console.error(`[${timestamp}] Error in ${req.method} ${req.path}:`, {
     requestId,
-    error: error.message,
-    stack: error.stack,
-    code: error.code,
-    name: error.name
+    error: (error instanceof Error) ? error.message : String(error),
+    stack: (error instanceof Error) ? error.stack : undefined,
+    code: (error instanceof Error && 'code' in error) ? (error as any).code : undefined,
+    name: (error instanceof Error) ? error.name : undefined
   });
 
   // Determine HTTP status code
   let statusCode = 500;
-  let errorCode = 'INTERNAL_ERROR';
+  let errorCode: string | undefined;
   
-  if (error.code && ERROR_STATUS_MAP[error.code]) {
-    statusCode = ERROR_STATUS_MAP[error.code];
-    errorCode = error.code;
-  } else if (error.name && ERROR_STATUS_MAP[error.name]) {
-    statusCode = ERROR_STATUS_MAP[error.name];
-    errorCode = error.name;
-  } else if (error.status) {
-    statusCode = error.status;
-    errorCode = `HTTP_${statusCode}`;
+  if (typeof error === 'object' && error !== null) {
+    const err = error as Record<string, any>;
+    if (err.code && ERROR_STATUS_MAP[err.code]) {
+      statusCode = ERROR_STATUS_MAP[err.code] || 500;
+      errorCode = err.code;
+    } else if (err.name && ERROR_STATUS_MAP[err.name]) {
+      statusCode = ERROR_STATUS_MAP[err.name] || 500;
+      errorCode = err.name;
+    } else if (err.status) {
+      statusCode = err.status;
+      errorCode = `HTTP_${statusCode}`;
+    }
   }
 
   // Generate appropriate error message
-  let message = error.message || 'An unexpected error occurred';
+  let message = (error instanceof Error) ? error.message : 'An unexpected error occurred';
   
   // Don't expose internal errors in production
   if (statusCode === 500 && process.env.NODE_ENV === 'production') {
     message = 'Internal server error';
   }
 
-  // Generate suggestions
-  const suggestions = generateErrorSuggestions(error);
+  // Map to unified reason
+  const reason = mapErrorToReason(error);
 
-  // Create standardized error response
-  const errorResponse: ApiErrorResponse = {
+  // Generate LLM-optimized solutions
+  const solutions = generateErrorSolutions(error, req);
+
+  // Create unified error response (BREAKING CHANGE)
+  const errorResponse: UnifiedErrorResponse = {
     success: false,
-    error: {
-      code: errorCode,
+    failedInfo: {
+      reason,
       message,
-      suggestions,
+      solutions,
+      ...(errorCode && { error_code: errorCode }),
       ...(process.env.NODE_ENV === 'development' && {
         details: {
-          stack: error.stack,
-          originalError: error.toString()
+          stack: (error instanceof Error) ? error.stack : undefined,
+          originalError: String(error),
+          requestId,
+          timestamp
         }
       })
-    },
-    meta: {
-      timestamp,
-      version: '1.0.0',
-      requestId
     }
   };
 
-  // Send error response
+  // Send unified error response
   res.status(statusCode).json(errorResponse);
 }
 
@@ -195,30 +312,21 @@ export function asyncHandler(
 }
 
 /**
- * Create standardized success response
+ * Create a standardized error response (for manual error creation)
  */
-export function createSuccessResponse<T>(
-  data: T,
-  message?: string,
-  meta?: Record<string, any>
-): {
-  success: true;
-  data: T;
-  message?: string;
-  meta: {
-    timestamp: string;
-    version: string;
-    [key: string]: any;
-  };
-} {
+export function createUnifiedErrorResponse(
+  reason: string,
+  message: string,
+  solutions: PrioritizedSolution[] = [],
+  errorCode?: string
+): UnifiedErrorResponse {
   return {
-    success: true,
-    data,
-    ...(message && { message }),
-    meta: {
-      timestamp: new Date().toISOString(),
-      version: '1.0.0',
-      ...meta
+    success: false,
+    failedInfo: {
+      reason,
+      message,
+      solutions,
+      ...(errorCode && { error_code: errorCode })
     }
   };
 }

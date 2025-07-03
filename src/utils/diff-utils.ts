@@ -43,9 +43,16 @@ function computeLCS(a: string[], b: string[]): number[][] {
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       if (a[i - 1] === b[j - 1]) {
-        lcs[i][j] = lcs[i - 1][j - 1] + 1;
+        const prevRow = lcs[i - 1];
+        const prevCol = prevRow ? prevRow[j - 1] : 0;
+        const currentRow = lcs[i];
+        if (currentRow) currentRow[j] = (prevCol || 0) + 1;
       } else {
-        lcs[i][j] = Math.max(lcs[i - 1][j], lcs[i][j - 1]);
+        const prevRow = lcs[i - 1];
+        const currentRow = lcs[i];
+        const up = prevRow ? prevRow[j] : 0;
+        const left = currentRow ? currentRow[j - 1] : 0;
+        if (currentRow) currentRow[j] = Math.max(up || 0, left || 0);
       }
     }
   }
@@ -63,14 +70,14 @@ function generateDiffFromLCS(a: string[], b: string[], lcs: number[][]): Array<{
   
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
-      diff.unshift({type: ' ', line: a[i - 1]});
+      diff.unshift({type: ' ', line: a[i - 1] || ''});
       i--;
       j--;
-    } else if (j > 0 && (i === 0 || lcs[i][j - 1] >= lcs[i - 1][j])) {
-      diff.unshift({type: '+', line: b[j - 1]});
+    } else if (j > 0 && (i === 0 || (lcs[i]?.[j - 1] || 0) >= (lcs[i - 1]?.[j] || 0))) {
+      diff.unshift({type: '+', line: b[j - 1] || ''});
       j--;
     } else if (i > 0) {
-      diff.unshift({type: '-', line: a[i - 1]});
+      diff.unshift({type: '-', line: a[i - 1] || ''});
       i--;
     }
   }
@@ -102,6 +109,8 @@ export function generateGitStyleDiff(original: string, modified: string, filenam
   for (let i = 0; i < diff.length; i++) {
     const line = diff[i];
     
+    if (!line) continue; // Add this check
+
     if (line.type !== ' ') {
       // 変更行の場合
       if (!currentHunk) {
@@ -117,25 +126,29 @@ export function generateGitStyleDiff(original: string, modified: string, filenam
         
         // 前のコンテキストを追加
         for (let j = startContext; j < i; j++) {
-          if (diff[j].type === ' ') {
-            currentHunk.lines.push(' ' + diff[j].line);
+          const contextLine = diff[j];
+          if (contextLine && contextLine.type === ' ') {
+            currentHunk.lines.push(' ' + (contextLine.line || ''));
           }
         }
       }
       
       // 現在の行を追加
-      currentHunk.lines.push(line.type + line.line);
+      if (currentHunk) {
+        currentHunk.lines.push(line.type + (line.line || ''));
+      }
       
     } else {
       // コンテキスト行の場合
       if (currentHunk) {
         // 後続のコンテキストを追加
-        currentHunk.lines.push(' ' + line.line);
+        currentHunk.lines.push(' ' + (line.line || ''));
         
         // コンテキストが十分になったらhunkを終了
         let contextCount = 0;
         for (let j = currentHunk.lines.length - 1; j >= 0; j--) {
-          if (currentHunk.lines[j][0] === ' ') {
+          const hunkLine = currentHunk.lines[j];
+          if (hunkLine && hunkLine[0] === ' ') {
             contextCount++;
           } else {
             break;
@@ -147,8 +160,9 @@ export function generateGitStyleDiff(original: string, modified: string, filenam
           let oldLine = 1;
           let newLine = 1;
           for (let j = 0; j < i - currentHunk.lines.length + 1; j++) {
-            if (diff[j].type !== '+') oldLine++;
-            if (diff[j].type !== '-') newLine++;
+            const dLine = diff[j];
+            if (dLine && dLine.type !== '+') oldLine++;
+            if (dLine && dLine.type !== '-') newLine++;
           }
           
           currentHunk.oldStart = oldLine;
@@ -173,8 +187,9 @@ export function generateGitStyleDiff(original: string, modified: string, filenam
     let oldLine = 1;
     let newLine = 1;
     for (let j = 0; j < diff.length - currentHunk.lines.length; j++) {
-      if (diff[j].type !== '+') oldLine++;
-      if (diff[j].type !== '-') newLine++;
+      const dLine = diff[j];
+      if (dLine && dLine.type !== '+') oldLine++;
+      if (dLine && dLine.type !== '-') newLine++;
     }
     
     currentHunk.oldStart = oldLine;
@@ -316,20 +331,26 @@ export function applyGitDiff(original: string, diffContent: string): {
     let hunksApplied = 0;
     
     // diffヘッダーをスキップ
-    while (diffIndex < diffLines.length && !diffLines[diffIndex].startsWith('@@')) {
-      diffIndex++;
+    while (diffIndex < diffLines.length) {
+      const line = diffLines[diffIndex];
+      if (!line || !line.startsWith('@@')) {
+        diffIndex++;
+      } else {
+        break;
+      }
     }
     
     // 各hunkを処理
     while (diffIndex < diffLines.length) {
-      if (!diffLines[diffIndex].startsWith('@@')) {
+      const currentLine = diffLines[diffIndex];
+      if (!currentLine || !currentLine.startsWith('@@')) {
         diffIndex++;
         continue;
       }
       
       // hunkヘッダーを解析
       const hunkHeader = diffLines[diffIndex];
-      const match = hunkHeader.match(/@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
+      const match = hunkHeader ? hunkHeader.match(/@@ -(\d+),(\d+) \+(\d+),(\d+) @@/) : null;
       if (!match) {
         return {
           content: original,
@@ -339,8 +360,8 @@ export function applyGitDiff(original: string, diffContent: string): {
         };
       }
       
-      const origStart = parseInt(match[1]) - 1; // 0-indexed
-      const origLength = parseInt(match[2]);
+      const origStart = parseInt(match[1] || '0') - 1; // 0-indexed
+      // const origLength = parseInt(match[2] || '0'); // origLengthを再導入
       diffIndex++;
       
       // hunk内容を収集
@@ -348,10 +369,11 @@ export function applyGitDiff(original: string, diffContent: string): {
       const additions: string[] = [];
       let contextCount = 0;
       
-      while (diffIndex < diffLines.length && diffLines[diffIndex].length > 0) {
+      while (diffIndex < diffLines.length) {
         const line = diffLines[diffIndex];
-        const prefix = line[0];
-        const content = line.substring(1);
+        if (!line || line.length === 0) break;
+        const prefix = line ? line[0] : '';
+        const content = line ? line.substring(1) : '';
         
         if (prefix === '-') {
           removals.push(origStart + contextCount + removals.length);
@@ -359,7 +381,7 @@ export function applyGitDiff(original: string, diffContent: string): {
           additions.push(content);
         } else if (prefix === ' ') {
           contextCount++;
-        } else if (line.startsWith('@@')) {
+        } else if (line && line.startsWith('@@')) {
           // 次のhunkの開始
           break;
         }
@@ -370,7 +392,7 @@ export function applyGitDiff(original: string, diffContent: string): {
       // パッチを適用（逆順で削除してインデックスのずれを防ぐ）
       for (let i = removals.length - 1; i >= 0; i--) {
         const lineIndex = removals[i];
-        if (lineIndex < lines.length) {
+        if (lineIndex !== undefined && lineIndex < lines.length) {
           lines.splice(lineIndex, 1);
         }
       }

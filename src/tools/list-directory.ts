@@ -1,215 +1,315 @@
 /**
- * Smart Filesystem MCP - List Directory Tool
- * FileSystemMCPの`list_directory`の置き換えとして機能する拡張版
- * ローカルファイルの詳細情報とサブディレクトリの要約情報を効率的に提供
+ * Smart Filesystem MCP - Enhanced List Directory Tool (LLM-Optimized)
+ * Breaking changes: absolute paths required, cross-platform support, enhanced analysis
+ * Optimized for LLM consumption with configurable limits and detailed metadata
  */
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { SafetyController } from '../core/safety-controller.js';
-import { getFileTypeFromExtension } from '../utils/helpers.js';
 import type { 
-  ListDirectoryParams,
-  ListDirectoryResponse,
-  FileInfo,
-  SubdirectoryInfo,
-  DirectorySummary
+  EnhancedListDirectoryParams,
+  LLMDirectorySuccess,
+  EnhancedFileInfo,
+  EnhancedSubdirectoryInfo
 } from '../core/types.js';
+import { createUnifiedError, createUnifiedErrorFromException, ErrorCodes, UnifiedError, validatePath } from '../utils/unified-error-handler.js';
 
 /**
- * 制限値定義
+ * LLM最適化制限値
  */
-const LIMITS = {
-  MAX_FILES_WARNING: 1000,         // 警告しきい値
-  MAX_SUBDIRS_TO_SCAN: 500,        // サブディレクトリスキャン上限
-  OPERATION_TIMEOUT: 10000,        // 10秒タイムアウト
-  MAX_FILE_SIZE_DISPLAY: 1024 * 1024 * 1024  // 1GB表示上限
+const LLM_LIMITS = {
+  DEFAULT_MAX_FILES: 50,           // デフォルトファイル表示数
+  DEFAULT_MAX_DIRS: 20,            // デフォルトディレクトリ表示数
+  MAX_FILES_ALLOWED: 200,          // 最大ファイル表示数
+  MAX_DIRS_ALLOWED: 50,            // 最大ディレクトリ表示数
+  OPERATION_TIMEOUT: 8000,         // 8秒タイムアウト
+  TOO_MANY_FILES_THRESHOLD: 200    // "多すぎる"警告しきい値
 };
 
 /**
- * ディレクトリの内容を一覧表示（拡張版）
+ * Cross-platform absolute path validation
+ */
+function isAbsolutePath(p: string): boolean {
+  // Unix/Linux absolute path
+  if (p.startsWith('/')) return true;
+  
+  // Windows absolute path (C:\ or C:/)
+  if (/^[A-Za-z]:[/\\]/.test(p)) return true;
+  
+  return false;
+}
+
+/**
+ * Normalize Windows paths to forward slashes for consistency
+ */
+function normalizeAbsolutePath(p: string): string {
+  // Convert Windows backslashes to forward slashes
+  return p.replace(/\\/g, '/');
+}
+
+/**
+ * Check if file/directory is hidden
+ */
+function isHidden(name: string): boolean {
+  return name.startsWith('.');
+}
+
+/**
+ * LLM最適化ディレクトリリスト（絶対パス必須、クロスプラットフォーム対応）
  */
 export async function listDirectory(
-  params: ListDirectoryParams,
+  params: EnhancedListDirectoryParams,
   safety: SafetyController
-): Promise<ListDirectoryResponse> {
-  const startTime = Date.now();
-  const warnings: string[] = [];
-  
-  // デフォルト値設定
-  const includeHidden = params.include_hidden ?? false;
-  const sortBy = params.sort_by ?? 'name';
-  const sortOrder = params.sort_order ?? 'asc';
-  
-  // ディレクトリアクセス権限チェック
-  const accessCheck = await safety.validateDirectoryAccess(params.path);
-  if (!accessCheck.safe) {
-    return {
-      directory: params.path,
-      files: [],
-      subdirectories: [],
-      summary: {
-        total_files: 0,
-        total_subdirectories: 0,
-        total_size_bytes: 0
-      },
-      status: 'error',
-      warnings: [`Directory access denied: ${accessCheck.reason}`]
-    };
-  }
-  
+): Promise<LLMDirectorySuccess | UnifiedError> {
   try {
+    // パスバリデーション
+    const pathValidation = validatePath(params.path);
+    if (!pathValidation.valid) {
+      return createUnifiedError(
+        ErrorCodes.MISSING_PATH,
+        'list_directory',
+        {},
+        pathValidation.error?.includes('empty') ? 'ディレクトリパスが指定されていません' : '不正なパス形式です'
+      );
+    }
+
+    // 絶対パスチェック（Breaking change, cross-platform）
+    if (!isAbsolutePath(params.path)) {
+      return createUnifiedError(
+        ErrorCodes.PATH_NOT_ABSOLUTE,
+        'list_directory',
+        { path: params.path }
+      );
+    }
+    
+    // オリジナルパスを保持
+    const originalPath = params.path;
+    // パスを正規化（内部処理用）
+    const normalizedPath = normalizeAbsolutePath(params.path);
+    
+    // ディレクトリアクセス権限チェック
+    const accessCheck = await safety.validateDirectoryAccess(normalizedPath);
+    if (!accessCheck.safe) {
+      return createUnifiedError(
+        ErrorCodes.ACCESS_DENIED,
+        'list_directory',
+        { path: params.path },
+        `アクセスが拒否されました: ${accessCheck.reason}`
+      );
+    }
+    
+    // ディレクトリ存在チェック
+    try {
+      const stats = await fs.stat(normalizedPath);
+      if (!stats.isDirectory()) {
+        return createUnifiedError(
+          ErrorCodes.FILE_NOT_FOUND,
+          'list_directory',
+          { path: params.path },
+          '指定されたパスはディレクトリではありません'
+        );
+      }
+    } catch {
+      return createUnifiedError(
+        ErrorCodes.FILE_NOT_FOUND,
+        'list_directory',
+        { path: params.path },
+        '指定されたディレクトリが見つかりません'
+      );
+    }
+    
+    // デフォルト値設定
+    const maxFiles = Math.min(
+      params.max_files || LLM_LIMITS.DEFAULT_MAX_FILES,
+      LLM_LIMITS.MAX_FILES_ALLOWED
+    );
+    const maxDirs = Math.min(
+      params.max_directories || LLM_LIMITS.DEFAULT_MAX_DIRS,
+      LLM_LIMITS.MAX_DIRS_ALLOWED
+    );
+    const includeHidden = params.include_hidden !== false; // デフォルトtrue
+    
     // タイムアウト制御付きで実行
-    const result = await safety.enforceTimeout(
-      scanDirectoryWithDetails(params.path, includeHidden, sortBy, sortOrder, warnings),
-      LIMITS.OPERATION_TIMEOUT,
+    return await safety.enforceTimeout(
+      scanDirectoryLLMOptimized({
+        ...params,
+        path: normalizedPath,
+        originalPath: originalPath, // オリジナルパスを追加
+        max_files: maxFiles,
+        max_directories: maxDirs,
+        include_hidden: includeHidden
+      }),
+      LLM_LIMITS.OPERATION_TIMEOUT,
       'List directory'
     );
     
-    // 大量ファイル警告
-    if (result.files.length > LIMITS.MAX_FILES_WARNING) {
-      warnings.push(`Large directory detected: ${result.files.length} files (warning threshold: ${LIMITS.MAX_FILES_WARNING})`);
-    }
-    
-    return {
-      ...result,
-      status: warnings.length > 0 ? 'partial' : 'success',
-      warnings: warnings.length > 0 ? warnings : undefined
-    };
-    
   } catch (error) {
-    // タイムアウトエラー
-    if (error instanceof Error && error.message.includes('timed out')) {
-      return {
-        directory: params.path,
-        files: [],
-        subdirectories: [],
-        summary: {
-          total_files: 0,
-          total_subdirectories: 0,
-          total_size_bytes: 0
-        },
-        status: 'partial',
-        warnings: ['Operation timed out after 10 seconds']
-      };
-    }
-    
-    // その他のエラー
-    return {
-      directory: params.path,
-      files: [],
-      subdirectories: [],
-      summary: {
-        total_files: 0,
-        total_subdirectories: 0,
-        total_size_bytes: 0
-      },
-      status: 'error',
-      warnings: [`Error: ${error instanceof Error ? error.message : 'Unknown error'}`]
-    };
+    return createUnifiedErrorFromException(error, 'list_directory', params.path);
   }
 }
 
 /**
- * ディレクトリスキャン実装
+ * LLM最適化ディレクトリスキャン
  */
-async function scanDirectoryWithDetails(
-  dirPath: string,
-  includeHidden: boolean,
-  sortBy: 'name' | 'size' | 'modified',
-  sortOrder: 'asc' | 'desc',
-  warnings: string[]
-): Promise<Omit<ListDirectoryResponse, 'status' | 'warnings'>> {
-  const files: FileInfo[] = [];
-  const subdirectories: SubdirectoryInfo[] = [];
+async function scanDirectoryLLMOptimized(
+  params: EnhancedListDirectoryParams & { 
+    max_files: number; 
+    max_directories: number; 
+    include_hidden: boolean;
+    originalPath?: string; // オリジナルパスを追加
+  }
+): Promise<LLMDirectorySuccess | UnifiedError> {
+  const files: EnhancedFileInfo[] = [];
+  const directories: EnhancedSubdirectoryInfo[] = [];
   let totalSize = 0;
-  let largestFile: { name: string; size_bytes: number } | undefined;
+  let totalFilesFound = 0;
+  let hiddenFilesExcluded = 0;
+  let hiddenDirsExcluded = 0;
+  
+  // ファイル種別分析用
+  const fileTypeStats = new Map<string, number>();
+  let hiddenFileCount = 0;
   
   try {
     // ディレクトリエントリを読み込み
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const entries = await fs.readdir(params.path, { withFileTypes: true });
     
-    // 各エントリを処理
-    const processPromises = entries.map(async (entry) => {
-      // 隠しファイルのフィルタリング
-      if (!includeHidden && entry.name.startsWith('.')) {
-        return;
-      }
-      
-      const fullPath = path.join(dirPath, entry.name);
+    // エントリを処理
+    for (const entry of entries) {
+      const fullPath = path.join(params.path, entry.name);
+      const hidden = isHidden(entry.name);
       
       try {
         const stats = await fs.stat(fullPath);
         
         if (entry.isFile()) {
-          // ファイル情報を収集
-          const fileInfo: FileInfo = {
-            name: entry.name,
-            size_bytes: stats.size,
-            type: 'file',
-            last_modified: stats.mtime.toISOString(),
-            extension: path.extname(entry.name).toLowerCase() || undefined
-          };
+          totalFilesFound++;
           
-          files.push(fileInfo);
-          totalSize += stats.size;
+          // 隠しファイルカウント
+          if (hidden) {
+            hiddenFileCount++;
+            if (!params.include_hidden) {
+              hiddenFilesExcluded++;
+              continue;
+            }
+          }
           
-          // 最大ファイルを追跡
-          if (!largestFile || stats.size > largestFile.size_bytes) {
-            largestFile = {
+          // 拡張子取得と統計
+          const ext = path.extname(entry.name).slice(1).toLowerCase();
+          if (ext) {
+            fileTypeStats.set(ext, (fileTypeStats.get(ext) || 0) + 1);
+          }
+          
+          // 拡張子フィルタ適用
+          if (params.extensions && !matchesExtensions(entry.name, params.extensions)) {
+            continue;
+          }
+          
+          // ファイル数制限
+          if (files.length < params.max_files) {
+            files.push({
               name: entry.name,
-              size_bytes: stats.size
-            };
+              size: stats.size,
+              ext: ext || undefined,
+              modified: stats.mtime.toISOString(),
+              hidden
+            });
+            
+            totalSize += stats.size;
           }
           
         } else if (entry.isDirectory()) {
-          // サブディレクトリの要約情報を取得
-          const subdirInfo = await getSubdirectoryInfo(fullPath, entry.name, stats, warnings);
-          if (subdirInfo) {
-            subdirectories.push(subdirInfo);
+          // 隠しディレクトリ処理
+          if (hidden && !params.include_hidden) {
+            hiddenDirsExcluded++;
+            continue;
+          }
+          
+          // ディレクトリ除外フィルタ適用
+          if (params.exclude_dirs && params.exclude_dirs.includes(entry.name)) {
+            continue;
+          }
+          
+          // ディレクトリ数制限
+          if (directories.length < params.max_directories) {
+            const subdirInfo = await getEnhancedSubdirectoryInfo(
+              fullPath, 
+              entry.name, 
+              stats,
+              hidden
+            );
+            if (subdirInfo) {
+              directories.push(subdirInfo);
+            }
           }
         }
-      } catch (error) {
-        // 個別ファイル/ディレクトリのエラーは警告として記録
-        warnings.push(`Permission denied: ${entry.name}`);
+      } catch {
+        // 個別エラーは無視して続行
       }
-    });
+    }
     
-    // 並列処理実行
-    await Promise.allSettled(processPromises);
+    // 多すぎるファイルの場合は統一エラー形式で返す
+    if (totalFilesFound > LLM_LIMITS.TOO_MANY_FILES_THRESHOLD) {
+      return createUnifiedError(
+        ErrorCodes.OPERATION_FAILED,
+        'list_directory',
+        { 
+          path: params.path,
+          file_count: totalFilesFound,
+          max_files: params.max_files || LLM_LIMITS.DEFAULT_MAX_FILES
+        },
+        `ファイル数が多すぎます（${totalFilesFound}件）。拡張子やディレクトリで絞り込んでください`
+      );
+    }
     
-    // ソート処理
-    sortEntries(files, subdirectories, sortBy, sortOrder);
-    
+    // 成功レスポンス
     return {
-      directory: dirPath,
+      success: true,
+      path: params.originalPath || params.path, // オリジナルパスを優先
       files,
-      subdirectories,
+      directories,
       summary: {
-        total_files: files.length,
-        total_subdirectories: subdirectories.length,
-        total_size_bytes: totalSize,
-        largest_file: largestFile
+        file_count: files.length,
+        directory_count: directories.length,
+        total_size: totalSize,
+        limited: files.length >= params.max_files,
+        additional_files: totalFilesFound > files.length ? totalFilesFound - files.length : undefined,
+        hidden_excluded: hiddenFilesExcluded + hiddenDirsExcluded > 0 
+          ? hiddenFilesExcluded + hiddenDirsExcluded 
+          : undefined
       }
     };
     
   } catch (error) {
-    throw error;
+    return createUnifiedErrorFromException(error, 'list_directory', params.path);
   }
 }
 
 /**
- * サブディレクトリの要約情報を取得
+ * 拡張子マッチング（ドット付き・なし両対応）
  */
-async function getSubdirectoryInfo(
+function matchesExtensions(fileName: string, extensions: string[]): boolean {
+  const fileExt = path.extname(fileName).toLowerCase();
+  
+  return extensions.some(ext => {
+    const targetExt = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
+    return fileExt === targetExt;
+  });
+}
+
+/**
+ * 拡張サブディレクトリ情報取得（directory_count追加）
+ */
+async function getEnhancedSubdirectoryInfo(
   subdirPath: string,
   name: string,
-  stats: fs.Stats,
-  warnings: string[]
-): Promise<SubdirectoryInfo | null> {
+  stats: any,
+  hidden: boolean
+): Promise<EnhancedSubdirectoryInfo | null> {
   try {
     let fileCount = 0;
-    let folderCount = 0;
+    let directoryCount = 0;
     
     // サブディレクトリの内容をカウント（深度1まで）
     const entries = await fs.readdir(subdirPath, { withFileTypes: true });
@@ -218,53 +318,21 @@ async function getSubdirectoryInfo(
       if (entry.isFile()) {
         fileCount++;
       } else if (entry.isDirectory()) {
-        folderCount++;
+        directoryCount++;
       }
     }
     
     return {
       name,
-      file_count: fileCount,
-      folder_count: folderCount,
-      type: 'directory',
-      last_modified: stats.mtime.toISOString()
+      files: fileCount,
+      directories: directoryCount,
+      modified: stats.mtime.toISOString(),
+      hidden
     };
     
-  } catch (error) {
-    // サブディレクトリアクセスエラー
-    warnings.push(`Cannot access subdirectory: ${name}`);
+  } catch {
+    // アクセスエラーの場合はnullを返す
     return null;
   }
 }
 
-/**
- * エントリのソート処理
- */
-function sortEntries(
-  files: FileInfo[],
-  subdirectories: SubdirectoryInfo[],
-  sortBy: 'name' | 'size' | 'modified',
-  sortOrder: 'asc' | 'desc'
-): void {
-  const multiplier = sortOrder === 'asc' ? 1 : -1;
-  
-  // ファイルのソート
-  files.sort((a, b) => {
-    switch (sortBy) {
-      case 'name':
-        return a.name.localeCompare(b.name) * multiplier;
-      case 'size':
-        return (a.size_bytes - b.size_bytes) * multiplier;
-      case 'modified':
-        return (new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime()) * multiplier;
-    }
-  });
-  
-  // サブディレクトリのソート（名前順のみ）
-  subdirectories.sort((a, b) => {
-    if (sortBy === 'modified') {
-      return (new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime()) * multiplier;
-    }
-    return a.name.localeCompare(b.name) * multiplier;
-  });
-}

@@ -6,8 +6,9 @@
 import { Request, Response } from 'express';
 import { SafetyController } from '../../core/safety-controller.js';
 import { searchContent } from '../../tools/search-content.js';
-import { createSuccessResponse, asyncHandler } from '../middleware/error-handler.js';
-import { sanitizePath } from '../middleware/validator.js';
+import { asyncHandler } from '../middleware/error-handler.js';
+// import { sanitizePath } from '../middleware/validator.js'; // No longer needed - using path validator
+import { validateAbsolutePath } from '../../utils/path-validator.js';
 import type { SearchContentParams } from '../../core/types.js';
 
 // Initialize services
@@ -17,7 +18,7 @@ const safety = new SafetyController();
  * POST /api/search/content
  * Search for files by name or content using regex patterns
  */
-export const searchFileContent = asyncHandler(async (req: Request, res: Response) => {
+export const searchFileContent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const {
     file_pattern,
     content_pattern,
@@ -33,8 +34,16 @@ export const searchFileContent = asyncHandler(async (req: Request, res: Response
     max_matches_per_file
   } = req.body;
 
-  // Sanitize directory path if provided
-  const directory = rawDirectory ? sanitizePath(rawDirectory) : undefined;
+  // Absolute path validation for directory (BREAKING CHANGE)
+  let directory: string | undefined;
+  if (rawDirectory) {
+    const pathValidation = validateAbsolutePath(rawDirectory, 'search_content');
+    if (!pathValidation.isValid && pathValidation.error) {
+      res.status(400).json(pathValidation.error);
+      return;
+    }
+    directory = pathValidation.absolutePath;
+  }
 
   const params: SearchContentParams = {
     ...(file_pattern && { file_pattern }),
@@ -51,26 +60,27 @@ export const searchFileContent = asyncHandler(async (req: Request, res: Response
     ...(max_matches_per_file && { max_matches_per_file })
   };
 
+  // Always return simple format (no backward compatibility)
   const result = await searchContent(params, safety);
-
-  res.json(createSuccessResponse(result, 'Search completed successfully', {
-    operation: 'search_content',
-    search_type: file_pattern ? (content_pattern ? 'both' : 'filename') : 'content',
-    total_files_scanned: result.search_info.total_files_scanned,
-    total_matches: result.summary.total_matches,
-    files_with_matches: result.summary.files_with_matches,
-    search_time_ms: result.search_info.search_time_ms
-  }));
+  res.json(result);
 });
 
 /**
  * GET /api/search/content
  * Simple search via query parameters (for quick testing)
  */
-export const searchFileContentSimple = asyncHandler(async (req: Request, res: Response) => {
+export const searchFileContentSimple = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const filePattern = req.query.file_pattern as string;
   const contentPattern = req.query.content_pattern as string;
-  const directory = req.query.directory ? sanitizePath(req.query.directory as string) : undefined;
+  let directory: string | undefined;
+  if (req.query.directory) {
+    const pathValidation = validateAbsolutePath(req.query.directory as string, 'search_content');
+    if (!pathValidation.isValid && pathValidation.error) {
+      res.status(400).json(pathValidation.error);
+      return;
+    }
+    directory = pathValidation.absolutePath;
+  }
   const extensions = req.query.extensions 
     ? (req.query.extensions as string).split(',').map(ext => ext.trim())
     : undefined;
@@ -84,14 +94,7 @@ export const searchFileContentSimple = asyncHandler(async (req: Request, res: Re
     ...(maxFiles && { max_files: maxFiles })
   };
 
+  // Always return simple format (no backward compatibility)
   const result = await searchContent(params, safety);
-
-  res.json(createSuccessResponse(result, 'Search completed successfully', {
-    operation: 'search_content_simple',
-    search_type: filePattern ? (contentPattern ? 'both' : 'filename') : 'content',
-    total_files_scanned: result.search_info.total_files_scanned,
-    total_matches: result.summary.total_matches,
-    files_with_matches: result.summary.files_with_matches,
-    search_time_ms: result.search_info.search_time_ms
-  }));
+  res.json(result);
 });

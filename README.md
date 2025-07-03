@@ -9,6 +9,17 @@ A **simple-first** Model Context Protocol (MCP) server that provides LLM-optimiz
 - **Progressive disclosure**: Start simple, add detail only when needed
 - **Minimal friction**: No preview → analyze → read chains
 - **Safety-first deletions**: `delete_directory` requires dry-run preview for large operations
+- **Stateless design**: All path parameters require absolute paths
+
+### 🏗️ Stateless Architecture
+
+**Absolute Path Requirement** - All file and directory operations require absolute paths:
+- ❌ Relative paths (`./file.txt`, `../parent/`) are rejected
+- ✅ Absolute paths (`/home/user/file.txt`, `C:\Users\file.txt`) are required
+- 🎯 **Eliminates hidden state dependency** on startup directory (`process.cwd()`)
+- 🔍 **Enables predictable behavior** - same path always refers to same file
+- 🤖 **LLM-optimized** - removes external state that LLMs cannot access
+- 🐛 **Simplifies debugging** - logs and errors show exact file locations
 
 ## 🔧 Complete Filesystem Operations
 
@@ -28,8 +39,8 @@ npm run api:dev
 # Access SwaggerUI
 http://localhost:3000/api-docs
 
-# Test with CURL
-curl "http://localhost:3000/api/files/info?path=./package.json"
+# Test with CURL (note: absolute paths required)
+curl "http://localhost:3000/api/files/info?path=/absolute/path/to/package.json"
 ```
 
 **Benefits:**
@@ -306,19 +317,62 @@ write_file({ path: "data.json", content: largeJsonData })
 // → Returns warning with size info and suggestions
 ```
 
-### edit_file
+### edit_file - Smart Replacement
 
-Edit files using literal string replacement, regex patterns, or Git-style diffs with preview support.
+Edit files with two approaches: simple string replacement (recommended for 90% of cases) or regex patterns for complex patterns.
 
 **Parameters:**
 - `path` (required): File to edit
 - `edits` (required): Array of edit operations
-- `dry_run`: Preview changes without applying
+- `dry_run`: Preview changes without applying (default: false)
 - `preserve_formatting`: Preserve indentation and remove trailing spaces (default: true)
+
+#### 🔧 Simple Replacement (Recommended for 90% of cases)
+```javascript
+{
+  path: "./config.js",
+  edits: [
+    { oldText: "PORT = 3000", newText: "PORT = 8080" },
+    { oldText: "localhost", newText: "0.0.0.0" }
+  ]
+}
+```
+
+**Use when:**
+- Exact string matches
+- Simple configuration changes
+- One-to-one replacements
+
+#### 🎯 Regex Replacement (For complex patterns)
+```javascript
+{
+  path: "./models.js", 
+  edits: [
+    {
+      type: "regex",
+      pattern: "const\\s+user\\d+\\s*=",
+      replacement: "const user =",
+      flags: "g"
+    }
+  ]
+}
+```
+
+**Use when:**
+- Multiple similar patterns need unified replacement
+- Whitespace normalization
+- Numbered variable renaming
+- Comment format changes
+
+#### 🔄 Mixed Editing
+You can combine both approaches in a single request for optimal efficiency.
 
 **Edit operations:**
 ```javascript
-// Literal edit
+// Simple format (NEW - Recommended)
+{ oldText: 'console.log', newText: 'logger.info' }
+
+// Literal edit (legacy format)
 { type: 'literal', old_text: 'console.log', new_text: 'logger.info' }
 
 // Regex edit
@@ -339,15 +393,26 @@ Edit files using literal string replacement, regex patterns, or Git-style diffs 
 
 **Example usage:**
 ```javascript
-// Simple literal replacement
+// Simple replacement (RECOMMENDED)
 edit_file({
   path: "app.js",
   edits: [
-    { type: 'literal', old_text: 'var', new_text: 'const' }
+    { oldText: 'var', newText: 'const' },
+    { oldText: 'require(', newText: 'import(' }
   ]
 })
 
-// Regex with preview
+// Preview changes before applying
+edit_file({
+  path: "config.js",
+  edits: [
+    { oldText: "PORT = 3000", newText: "PORT = 8080" }
+  ],
+  dry_run: true
+})
+// → Shows unified diff preview
+
+// Regex for complex patterns
 edit_file({
   path: "src/index.js",
   edits: [
@@ -357,11 +422,12 @@ edit_file({
 })
 // → Shows match count, samples, and unified diff
 
-// Apply Git-style diff
+// Mixed editing
 edit_file({
-  path: "config.json",
+  path: "app.js",
   edits: [
-    { type: 'diff', diff_content: patchContent }
+    { oldText: "// TODO: implement", newText: "// DONE: implemented" },
+    { type: 'regex', pattern: '\\s*console\\.log\\([^)]*\\);?', replacement: '', flags: 'g' }
   ]
 })
 ```
@@ -701,7 +767,9 @@ npm run cli write test.txt -c "Hello World"               # Write with content o
 echo "Hello World" | npm run cli write test.txt           # Write from stdin
 
 # Test file edit
-npm run cli edit config.js -l "console.log,logger.info" --dry-run  # Preview literal edit
+npm run cli edit config.js -l "console.log,logger.info" --dry-run  # Simple replacement
+npm run cli edit test.js -l "PORT = 3000,PORT = 8080"              # Config change
+npm run cli edit app.js -l "localhost,0.0.0.0" -l "var,const"      # Multiple replacements
 npm run cli edit test.js -r "TODO.*$,DONE" -d                      # Preview regex edit
 npm run cli edit app.js -f patch.diff                               # Apply diff from file
 cat changes.diff | npm run cli edit app.js -f -                    # Apply diff from stdin

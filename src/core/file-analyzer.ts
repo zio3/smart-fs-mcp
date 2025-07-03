@@ -5,8 +5,10 @@
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { FileSystemPromises } from './types';
+import { Stats } from 'fs';
 import { detect } from 'chardet';
-import { FILE_CLASSIFICATION, TOKEN_ESTIMATION, BOM_PATTERNS } from '../utils/constants.js';
+import { FILE_CLASSIFICATION, TOKEN_ESTIMATION } from '../utils/constants.js';
 import { 
   getFileTypeFromExtension,
   detectBOM,
@@ -23,8 +25,14 @@ export class FileAnalyzer {
   private fileCache: Map<string, { analysis: FileAnalysis; timestamp: number }>;
   private cacheTimeout: number = 5 * 60 * 1000; // 5 minutes
 
-  constructor() {
+  private fsPromises: FileSystemPromises;
+
+  private isBinaryContentFn: (buffer: Buffer, bytesToCheck?: number) => boolean;
+
+  constructor(fsPromises: FileSystemPromises = fs, isBinaryContentFn: (buffer: Buffer, bytesToCheck?: number) => boolean = isBinaryContent) {
     this.fileCache = new Map();
+    this.fsPromises = fsPromises;
+    this.isBinaryContentFn = isBinaryContentFn;
   }
 
   /**
@@ -37,7 +45,7 @@ export class FileAnalyzer {
 
     try {
       // Get basic file info
-      const stats = await fs.stat(filePath);
+      const stats = await this.fsPromises.stat(filePath);
       const fileInfo = await this.getFileInfo(filePath, stats);
       
       // Detect file type
@@ -50,7 +58,7 @@ export class FileAnalyzer {
       const encoding = await this.detectEncoding(buffer, filePath);
       
       // Check if binary
-      const isBinary = isBinaryContent(buffer);
+      const isBinary = this.isBinaryContentFn(buffer);
       
       // Estimate tokens if text file
       let estimatedTokens: number | undefined;
@@ -96,14 +104,15 @@ export class FileAnalyzer {
       return analysis;
       
     } catch (error) {
-      throw new Error(`Failed to analyze file ${filePath}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to analyze file ${filePath}: ${errorMessage}`);
     }
   }
 
   /**
    * Get basic file information
    */
-  private async getFileInfo(filePath: string, stats: fs.Stats): Promise<FileInfo> {
+  private async getFileInfo(filePath: string, stats: Stats): Promise<FileInfo> {
     return {
       path: filePath,
       name: path.basename(filePath),
@@ -136,11 +145,11 @@ export class FileAnalyzer {
       // Check for shebang in scripts
       if (content.length >= 2 && content[0] === 0x23 && content[1] === 0x21) { // #!
         const firstLine = content.toString('utf8', 0, Math.min(100, content.length)).split('\n')[0];
-        if (firstLine.includes('python')) {
+        if (firstLine && firstLine.includes('python')) {
           return { category: 'code', specificType: 'python', readable: true, confidence: 'high' };
-        } else if (firstLine.includes('node') || firstLine.includes('deno')) {
+        } else if (firstLine && (firstLine.includes('node') || firstLine.includes('deno'))) {
           return { category: 'code', specificType: 'javascript', readable: true, confidence: 'high' };
-        } else if (firstLine.includes('bash') || firstLine.includes('sh')) {
+        } else if (firstLine && (firstLine.includes('bash') || firstLine.includes('sh'))) {
           return { category: 'code', specificType: 'shell', readable: true, confidence: 'high' };
         }
       }
@@ -203,7 +212,7 @@ export class FileAnalyzer {
     if (filePath) {
       const ext = path.extname(filePath).toLowerCase();
       // Source code files are usually UTF-8
-      if (FILE_CLASSIFICATION.code.extensions.includes(ext)) {
+      if (FILE_CLASSIFICATION.code.extensions.includes(ext as any)) {
         return 'utf8';
       }
     }
@@ -224,7 +233,7 @@ export class FileAnalyzer {
    */
   private detectProgrammingLanguage(filePath: string, content: string): string | undefined {
     const ext = path.extname(filePath).toLowerCase();
-    
+
     // Extension mapping
     const extensionLanguageMap: Record<string, string> = {
       '.js': 'JavaScript',
@@ -250,42 +259,105 @@ export class FileAnalyzer {
       '.bash': 'Bash',
       '.ps1': 'PowerShell'
     };
-    
+
     // First try extension
     if (extensionLanguageMap[ext]) {
       return extensionLanguageMap[ext];
     }
-    
-    // Try content-based detection for common patterns
-    const lines = content.split('\n').slice(0, 10);
-    const firstNonEmptyLine = lines.find(line => line.trim().length > 0);
-    
-    if (firstNonEmptyLine) {
+
+    // Try content-based detection for common patterns across first few lines
+    const lines = content.split('\n').slice(0, 10); // Check first 10 lines
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.length === 0) continue;
+
       // Python
-      if (firstNonEmptyLine.includes('import ') || firstNonEmptyLine.includes('from ') || 
-          firstNonEmptyLine.includes('def ') || firstNonEmptyLine.includes('class ')) {
+      if (trimmedLine.includes('import ') || trimmedLine.includes('from ') ||
+          trimmedLine.includes('def ') || trimmedLine.includes('class ')) {
         return 'Python';
       }
-      
+
       // JavaScript/TypeScript
-      if (firstNonEmptyLine.includes('const ') || firstNonEmptyLine.includes('let ') ||
-          firstNonEmptyLine.includes('var ') || firstNonEmptyLine.includes('function ')) {
-        return content.includes(': ') ? 'TypeScript' : 'JavaScript';
+      if (trimmedLine.includes('const ') || trimmedLine.includes('let ') ||
+          trimmedLine.includes('var ') || trimmedLine.includes('function ') ||
+          trimmedLine.includes('console.log(') || trimmedLine.includes('document.getElementById(')) {
+        return content.includes(': ') ? 'TypeScript' : 'JavaScript'; // Simple heuristic for TS
       }
-      
+
       // Java
-      if (firstNonEmptyLine.includes('public class') || firstNonEmptyLine.includes('package ')) {
+      if (trimmedLine.includes('public class') || trimmedLine.includes('package ') ||
+          trimmedLine.includes('import java.')) {
         return 'Java';
       }
+
+      // C#
+      if (trimmedLine.includes('using System;') || trimmedLine.includes('namespace ') ||
+          trimmedLine.includes('public class ') || trimmedLine.includes('private void ')) {
+        return 'C#';
+      }
+
+      // Go
+      if (trimmedLine.includes('package main') || trimmedLine.includes('import "fmt"') ||
+          trimmedLine.includes('func main()')) {
+        return 'Go';
+      }
+
+      // Rust
+      if (trimmedLine.includes('fn main()') || trimmedLine.includes('mod ') ||
+          trimmedLine.includes('use std::')) {
+        return 'Rust';
+      }
+
+      // PHP
+      if (trimmedLine.startsWith('<?php') || trimmedLine.includes('function ') ||
+          trimmedLine.includes('class ')) {
+        return 'PHP';
+      }
+
+      // Swift
+      if (trimmedLine.includes('import Cocoa') || trimmedLine.includes('import UIKit') ||
+          trimmedLine.includes('func ') || trimmedLine.includes('class ')) {
+        return 'Swift';
+      }
+
+      // Kotlin
+      if (trimmedLine.includes('fun main()') || trimmedLine.includes('package ') ||
+          trimmedLine.includes('class ')) {
+        return 'Kotlin';
+      }
+
+      // Ruby
+      if (trimmedLine.includes('require ') || trimmedLine.includes('def ') ||
+          trimmedLine.includes('class ')) {
+        return 'Ruby';
+      }
+
+      // Lua
+      if (trimmedLine.includes('function ') || trimmedLine.includes('local ') ||
+          trimmedLine.includes('print(')) {
+        return 'Lua';
+      }
+
+      // Dart
+      if (trimmedLine.includes('import "package:"') || trimmedLine.includes('void main()') ||
+          trimmedLine.includes('class ')) {
+        return 'Dart';
+      }
+
+      // Shell
+      if (trimmedLine.startsWith('#!') && (trimmedLine.includes('bash') || trimmedLine.includes('sh'))) {
+        return 'Shell';
+      }
     }
-    
+
     return undefined;
   }
 
   /**
    * Get MIME type for file
    */
-  private getMimeType(fileType: FileType, filePath: string): string {
+  private getMimeType(_fileType: FileType, filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
     
     // Common MIME types
@@ -339,7 +411,7 @@ export class FileAnalyzer {
   /**
    * Generate warnings for file
    */
-  private generateWarnings(stats: fs.Stats, isBinary: boolean, estimatedTokens?: number): string[] {
+  private generateWarnings(stats: Stats, isBinary: boolean, estimatedTokens?: number): string[] {
     const warnings: string[] = [];
     
     // Size warnings
@@ -370,7 +442,7 @@ export class FileAnalyzer {
    * Read start of file safely
    */
   private async readFileStart(filePath: string, bytes: number): Promise<Buffer> {
-    const handle = await fs.open(filePath, 'r');
+    const handle = await this.fsPromises.open(filePath, 'r');
     try {
       const buffer = Buffer.alloc(bytes);
       const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
@@ -385,7 +457,7 @@ export class FileAnalyzer {
    */
   private async checkWritable(filePath: string): Promise<boolean> {
     try {
-      await fs.access(filePath, fs.constants.W_OK);
+      await this.fsPromises.access(filePath, this.fsPromises.constants.W_OK);
       return true;
     } catch {
       return false;
@@ -397,7 +469,7 @@ export class FileAnalyzer {
    */
   private async checkExecutable(filePath: string): Promise<boolean> {
     try {
-      await fs.access(filePath, fs.constants.X_OK);
+      await this.fsPromises.access(filePath, this.fsPromises.constants.X_OK);
       return true;
     } catch {
       return false;

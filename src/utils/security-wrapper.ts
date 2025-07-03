@@ -7,13 +7,8 @@ import { getSecurityController } from '../core/security-controller-v2.js';
 import { SafetyController } from '../core/safety-controller.js';
 import { FileAnalyzer } from '../core/file-analyzer.js';
 import type { 
-  ReadFileParams,
-  ReadFileForceParams,
   ListDirectoryParams,
-  SearchContentParams,
-  WriteFileParams,
-  EditFileParams,
-  MoveFileParams
+  SearchContentParams
 } from '../core/types.js';
 
 /**
@@ -32,7 +27,7 @@ export async function withReadSecurity<T>(
     'read',
     async (validatedPath) => {
       // 検証済みパスで元の関数を実行
-      const modifiedParams = { ...params, path: validatedPath };
+      // const modifiedParams = { ...params, path: validatedPath };
       return operation(validatedPath, safety, analyzer);
     }
   );
@@ -41,9 +36,9 @@ export async function withReadSecurity<T>(
 /**
  * 書き込み操作用セキュリティラッパー
  */
-export async function withWriteSecurity<T>(
-  params: { path: string } | { source: string; destination: string },
-  operation: (validatedParams: any, safety: SafetyController, analyzer?: FileAnalyzer) => Promise<T>,
+export async function withWriteSecurity<T, P extends { path: string } | { source: string; destination: string }>(
+  params: P,
+  operation: (validatedParams: P, safety: SafetyController, analyzer?: FileAnalyzer) => Promise<T>,
   safety: SafetyController,
   analyzer?: FileAnalyzer
 ): Promise<T> {
@@ -91,9 +86,9 @@ export async function withWriteSecurity<T>(
 /**
  * ディレクトリ操作用セキュリティラッパー
  */
-export async function withDirectorySecurity<T>(
-  params: ListDirectoryParams | SearchContentParams,
-  operation: (validatedParams: any, safety: SafetyController) => Promise<T>,
+export async function withDirectorySecurity<T, P extends ListDirectoryParams | SearchContentParams>(
+  params: P,
+  operation: (validatedParams: P, safety: SafetyController) => Promise<T>,
   safety: SafetyController
 ): Promise<T> {
   const security = getSecurityController();
@@ -114,7 +109,7 @@ export async function withDirectorySecurity<T>(
   
   // ListDirectoryParamsの場合
   return security.executeWithSecurity(
-    params.path,
+    (params as ListDirectoryParams).path,
     'read',
     async (validatedPath) => {
       const modifiedParams = { ...params, path: validatedPath };

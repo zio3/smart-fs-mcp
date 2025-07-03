@@ -5,7 +5,7 @@
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { SAFETY_LIMITS, FILE_CLASSIFICATION, BINARY_SIGNATURES, ERROR_MESSAGES } from '../utils/constants.js';
+import { SAFETY_LIMITS, ERROR_MESSAGES } from '../utils/constants.js';
 import { 
   isPathSafe, 
   getFileTypeFromExtension, 
@@ -14,7 +14,7 @@ import {
   safeFileStats,
   formatBytes 
 } from '../utils/helpers.js';
-import type { SafetyResult, SafetyViolationType, FileInfo } from './types.js';
+import type { SafetyResult } from './types.js';
 
 /**
  * Safety Controller class - enforces all safety rules
@@ -58,7 +58,7 @@ export class SafetyController {
 
       // Step 2: Check file exists and get stats
       const statsResult = await safeFileStats(filePath);
-      if (!statsResult.success || !statsResult.data) {
+      if (statsResult.status !== 'success' || !statsResult.data) {
         return {
           safe: false,
           reason: `File not found or inaccessible: ${filePath}`,
@@ -266,7 +266,7 @@ export class SafetyController {
 
       // Check if exists and is directory
       const statsResult = await safeFileStats(dirPath);
-      if (!statsResult.success || !statsResult.data) {
+      if (statsResult.status !== 'success' || !statsResult.data) {
         return {
           safe: false,
           reason: `Directory not found: ${dirPath}`,

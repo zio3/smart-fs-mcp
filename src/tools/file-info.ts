@@ -1,163 +1,149 @@
 /**
  * Smart Filesystem MCP - File Info Tool
- * ファイル情報取得ツール（拡張版）
+ * ファイル情報取得ツール（軽量版）
  */
 
 import * as fs from 'fs/promises';
+import type { Stats } from 'fs';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
-import { FileAnalyzer } from '../core/file-analyzer.js';
-import { SAFETY_LIMITS } from '../utils/constants.js';
-import type { FileAnalysis } from '../core/types.js';
+import { createUnifiedError, createUnifiedErrorFromException, ErrorCodes, UnifiedError, validatePath } from '../utils/unified-error-handler.js';
 
 /**
  * file_infoパラメータ
  */
 export interface FileInfoParams {
   path: string;
-  include_analysis?: boolean;
 }
 
 /**
- * ファイル分析情報
+ * 成功レスポンス形式 (軽量版)
  */
-export interface FileAnalysisInfo {
-  is_binary: boolean;
-  encoding: string;
-  estimated_tokens: number;
-  file_type: 'text' | 'code' | 'config' | 'data' | 'binary';
-  syntax_language?: string;
-  line_count?: number;
-  char_count?: number;
-  safe_to_read: boolean;
-}
-
-/**
- * ディレクトリ情報
- */
-export interface DirectoryInfo {
-  file_count: number;
-  subdirectory_count: number;
-  total_size_estimate: number;
-}
-
-/**
- * file_info結果
- */
-export interface FileInfoResult {
-  path: string;
-  resolved_path: string;
+interface FileInfoSuccess {
+  success: true;
   exists: boolean;
-  type: 'file' | 'directory' | 'symlink' | 'other';
-  
-  // 基本情報
+  type: 'file' | 'directory' | 'unknown';
   size: number;
-  created: string;
+  is_binary: boolean;
   modified: string;
-  accessed: string;
-  permissions: {
-    readable: boolean;
-    writable: boolean;
-    executable: boolean;
-    mode: string;
-  };
-  
-  // 拡張分析情報
-  file_analysis?: FileAnalysisInfo;
-  
-  // ディレクトリ情報
-  directory_info?: DirectoryInfo;
 }
 
 /**
- * 言語検出
+ * 統一レスポンス形式
  */
-function detectSyntaxLanguage(filePath: string): string | undefined {
+export type FileInfoUnifiedResponse = FileInfoSuccess | UnifiedError;
+
+/**
+ * バイナリファイルの拡張子リスト
+ */
+const BINARY_EXTENSIONS = new Set([
+  // 画像
+  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.webp', '.svg', '.tiff', '.heic',
+  // 動画
+  '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm', '.m4v', '.mpg', '.mpeg',
+  // 音声
+  '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus',
+  // アーカイブ
+  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz', '.z',
+  // 実行ファイル
+  '.exe', '.dll', '.so', '.dylib', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.msi',
+  // ドキュメント
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
+  // その他バイナリ
+  '.bin', '.dat', '.db', '.sqlite', '.class', '.pyc', '.pyo', '.wasm', '.o'
+]);
+
+/**
+ * 高速バイナリ判定
+ * 拡張子ベースで判定し、不明な場合のみファイル内容をチェック
+ */
+async function isBinaryFile(filePath: string, stats: Stats): Promise<boolean> {
   const ext = path.extname(filePath).toLowerCase();
-  const languageMap: Record<string, string> = {
-    '.js': 'javascript',
-    '.jsx': 'javascript',
-    '.ts': 'typescript',
-    '.tsx': 'typescript',
-    '.py': 'python',
-    '.json': 'json',
-    '.yaml': 'yaml',
-    '.yml': 'yaml',
-    '.md': 'markdown',
-    '.html': 'html',
-    '.css': 'css',
-    '.scss': 'scss',
-    '.sass': 'sass',
-    '.less': 'less',
-    '.sql': 'sql',
-    '.sh': 'bash',
-    '.bash': 'bash',
-    '.ps1': 'powershell',
-    '.java': 'java',
-    '.c': 'c',
-    '.cpp': 'cpp',
-    '.cs': 'csharp',
-    '.php': 'php',
-    '.rb': 'ruby',
-    '.go': 'go',
-    '.rs': 'rust',
-    '.swift': 'swift',
-    '.kt': 'kotlin',
-    '.r': 'r',
-    '.m': 'matlab',
-    '.lua': 'lua',
-    '.pl': 'perl',
-    '.xml': 'xml',
-    '.vue': 'vue',
-    '.svelte': 'svelte'
-  };
-  return languageMap[ext];
+  
+  // 拡張子で判定
+  if (BINARY_EXTENSIONS.has(ext)) {
+    return true;
+  }
+  
+  // テキストファイルの拡張子
+  const textExtensions = [
+    '.txt', '.md', '.js', '.ts', '.jsx', '.tsx', '.json', '.xml', '.html', '.css',
+    '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.php',
+    '.yaml', '.yml', '.toml', '.ini', '.conf', '.sh', '.bash', '.ps1', '.bat',
+    '.sql', '.r', '.m', '.lua', '.pl', '.swift', '.kt', '.scala', '.clj', '.elm'
+  ];
+  
+  if (textExtensions.includes(ext)) {
+    return false;
+  }
+  
+  // 拡張子が不明な場合、ファイルの先頭部分をチェック
+  if (stats.size === 0) {
+    return false; // 空ファイルはテキスト扱い
+  }
+  
+  try {
+    // 最初の512バイトのみ読み取り
+    const handle = await fs.open(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.min(512, stats.size));
+      await handle.read(buffer, 0, buffer.length, 0);
+      
+      // NULL文字や制御文字の存在でバイナリ判定
+      for (let i = 0; i < buffer.length; i++) {
+        const byte = buffer[i];
+        // NULL文字または印刷不可能な制御文字（改行、タブ、キャリッジリターンを除く）
+        if (byte !== undefined && (byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13))) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // 読み取りエラーの場合は安全側に倒してバイナリ扱い
+    return true;
+  }
 }
 
 /**
- * ファイルタイプ検出
+ * ファイル情報を取得（軽量版）
  */
-function detectFileType(filePath: string, analysis: FileAnalysis): 'text' | 'code' | 'config' | 'data' | 'binary' {
-  if (analysis.isBinary) return 'binary';
+export async function fileInfo(params: FileInfoParams): Promise<FileInfoUnifiedResponse> {
+  const { path: targetPath } = params;
   
-  const ext = path.extname(filePath).toLowerCase();
-  const basename = path.basename(filePath).toLowerCase();
-  
-  // 設定ファイル
-  const configExts = ['.json', '.yaml', '.yml', '.toml', '.ini', '.conf', '.config', '.env'];
-  const configNames = ['package.json', 'tsconfig.json', '.gitignore', '.eslintrc', 'dockerfile', 'makefile'];
-  if (configExts.includes(ext) || configNames.includes(basename)) {
-    return 'config';
+  // パスバリデーション
+  const pathValidation = validatePath(targetPath);
+  if (!pathValidation.valid) {
+    return createUnifiedError(
+      ErrorCodes.MISSING_PATH,
+      'file_info',
+      {},
+      pathValidation.error?.includes('empty') ? 'ファイルパスが指定されていません' : '不正なパス形式です'
+    );
   }
   
-  // コードファイル
-  if (detectSyntaxLanguage(filePath)) {
-    return 'code';
-  }
-  
-  // データファイル
-  const dataExts = ['.csv', '.tsv', '.xml', '.sql'];
-  if (dataExts.includes(ext)) {
-    return 'data';
-  }
-  
-  return 'text';
-}
-
-/**
- * ファイル情報を取得
- */
-export async function fileInfo(
-  params: FileInfoParams,
-  analyzer: FileAnalyzer
-): Promise<FileInfoResult> {
-  const { path: targetPath, include_analysis = true } = params;
   const security = getSecurityController();
+  
+  // ファイルの存在確認を先に行う
+  try {
+    await fs.access(targetPath, fs.constants.F_OK);
+  } catch (error) {
+    if ((error as any).code === 'ENOENT') {
+      return createUnifiedError(ErrorCodes.FILE_NOT_FOUND, 'file_info', { path: targetPath });
+    }
+  }
   
   // セキュリティチェック
   const validation = await security.validateAccess(targetPath, 'read');
   if (!validation.allowed) {
-    throw new Error(validation.reason || 'Access denied');
+    return createUnifiedError(
+      ErrorCodes.ACCESS_DENIED,
+      'file_info',
+      { path: targetPath },
+      `アクセスが拒否されました: ${validation.reason || 'Access denied'}`
+    );
   }
   
   const resolvedPath = validation.resolved_path;
@@ -165,154 +151,35 @@ export async function fileInfo(
   try {
     // ファイル/ディレクトリの統計情報を取得
     const stats = await fs.stat(resolvedPath);
-    const lstat = await fs.lstat(resolvedPath);
     
-    // 基本タイプ判定
-    let type: 'file' | 'directory' | 'symlink' | 'other';
-    if (lstat.isSymbolicLink()) {
-      type = 'symlink';
-    } else if (stats.isDirectory()) {
+    // タイプ判定
+    let type: 'file' | 'directory' | 'unknown';
+    if (stats.isDirectory()) {
       type = 'directory';
     } else if (stats.isFile()) {
       type = 'file';
     } else {
-      type = 'other';
+      type = 'unknown';
     }
     
-    // 権限チェック
-    const permissions = {
-      readable: false,
-      writable: false,
-      executable: false,
-      mode: '0000'
-    };
-    
-    try {
-      await fs.access(resolvedPath, fs.constants.R_OK);
-      permissions.readable = true;
-    } catch {}
-    
-    try {
-      await fs.access(resolvedPath, fs.constants.W_OK);
-      permissions.writable = true;
-    } catch {}
-    
-    try {
-      await fs.access(resolvedPath, fs.constants.X_OK);
-      permissions.executable = true;
-    } catch {}
-    
-    // Unix形式の権限（Windowsでは擬似的）
-    if (process.platform !== 'win32') {
-      permissions.mode = '0' + (stats.mode & parseInt('777', 8)).toString(8);
-    } else {
-      // Windows: 擬似的な権限表現
-      const r = permissions.readable ? 4 : 0;
-      const w = permissions.writable ? 2 : 0;
-      const x = permissions.executable ? 1 : 0;
-      permissions.mode = `0${r + w + x}${r + w + x}${r + w + x}`;
+    // バイナリ判定（ファイルの場合のみ）
+    let isBinary = false;
+    if (type === 'file') {
+      isBinary = await isBinaryFile(resolvedPath, stats);
     }
     
-    // 基本結果
-    const result: FileInfoResult = {
-      path: targetPath,
-      resolved_path: resolvedPath,
+    // 軽量レスポンス
+    return {
+      success: true,
       exists: true,
       type,
       size: stats.size,
-      created: stats.birthtime.toISOString(),
-      modified: stats.mtime.toISOString(),
-      accessed: stats.atime.toISOString(),
-      permissions
+      is_binary: isBinary,
+      modified: stats.mtime.toISOString()
     };
     
-    // ファイル分析（ファイルの場合のみ）
-    if (type === 'file' && include_analysis) {
-      try {
-        const analysis = await analyzer.analyzeFile(resolvedPath);
-        
-        result.file_analysis = {
-          is_binary: analysis.isBinary,
-          encoding: analysis.encoding || 'unknown',
-          estimated_tokens: analysis.estimatedTokens || 0,
-          file_type: detectFileType(resolvedPath, analysis),
-          syntax_language: detectSyntaxLanguage(resolvedPath),
-          line_count: analysis.preview?.lines.length,
-          char_count: stats.size, // バイト数を文字数として近似
-          safe_to_read: analysis.isSafeToRead && 
-                       analysis.estimatedTokens < SAFETY_LIMITS.MAX_TOKEN_ESTIMATE
-        };
-      } catch (error) {
-        // 分析エラーの場合は基本情報のみ返す
-        result.file_analysis = {
-          is_binary: true,
-          encoding: 'unknown',
-          estimated_tokens: 0,
-          file_type: 'binary',
-          safe_to_read: false
-        };
-      }
-    }
-    
-    // ディレクトリ情報（ディレクトリの場合のみ）
-    if (type === 'directory') {
-      try {
-        const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
-        let fileCount = 0;
-        let subdirectoryCount = 0;
-        let totalSize = 0;
-        
-        for (const entry of entries) {
-          if (entry.isFile()) {
-            fileCount++;
-            try {
-              const filePath = path.join(resolvedPath, entry.name);
-              const fileStats = await fs.stat(filePath);
-              totalSize += fileStats.size;
-            } catch {}
-          } else if (entry.isDirectory()) {
-            subdirectoryCount++;
-          }
-        }
-        
-        result.directory_info = {
-          file_count: fileCount,
-          subdirectory_count: subdirectoryCount,
-          total_size_estimate: totalSize
-        };
-      } catch (error) {
-        // ディレクトリ読み取りエラー
-        result.directory_info = {
-          file_count: 0,
-          subdirectory_count: 0,
-          total_size_estimate: 0
-        };
-      }
-    }
-    
-    return result;
-    
   } catch (error) {
-    // ファイルが存在しない場合
-    if (error instanceof Error && error.message.includes('ENOENT')) {
-      return {
-        path: targetPath,
-        resolved_path: resolvedPath,
-        exists: false,
-        type: 'other',
-        size: 0,
-        created: '',
-        modified: '',
-        accessed: '',
-        permissions: {
-          readable: false,
-          writable: false,
-          executable: false,
-          mode: '0000'
-        }
-      };
-    }
-    
-    throw error;
+    // エラーハンドリング
+    return createUnifiedErrorFromException(error, 'file_info', targetPath);
   }
 }
