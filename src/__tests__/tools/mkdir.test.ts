@@ -26,8 +26,9 @@ describe('mkdir tool', () => {
     const newDirPath = path.join(testDir, 'new-dir');
     const result = await mkdir({ path: newDirPath });
 
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.status).toBe('success');
       expect(result.directory_info.resolved_path).toBe(newDirPath);
       expect(result.directory_info.created_new).toBe(true);
       expect(result.directory_info.parent_directories_created).toEqual([]);
@@ -39,8 +40,9 @@ describe('mkdir tool', () => {
     const nestedDirPath = path.join(testDir, 'level1', 'level2', 'level3');
     const result = await mkdir({ path: nestedDirPath });
 
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.status).toBe('success');
       expect(result.directory_info.resolved_path).toBe(nestedDirPath);
       expect(result.directory_info.created_new).toBe(true);
       expect(result.directory_info.parent_directories_created).toEqual([
@@ -55,12 +57,10 @@ describe('mkdir tool', () => {
     const nestedDirPath = path.join(testDir, 'level1', 'level2');
     const result = await mkdir({ path: nestedDirPath, recursive: false });
 
-    expect(result.status).toBe('error');
-    if (result.status === 'error') {
-      expect(result.warnings).toBeDefined();
-      if (result.warnings) {
-        expect(result.warnings[0]).toContain('Unknown error');
-      }
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBeDefined();
+      expect(result.error.code).toContain('operation_failed');
     }
     await expect(fs.access(nestedDirPath)).rejects.toThrow();
   });
@@ -71,20 +71,22 @@ describe('mkdir tool', () => {
 
     const result = await mkdir({ path: existingDirPath });
 
-    expect(result.status).toBe('warning');
-    if (result.status === 'warning') {
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.status).toBe('warning');
       expect(result.warnings).toContain('Directory already exists');
     }
     await expect(fs.access(existingDirPath)).resolves.toBeUndefined();
   });
 
   it('should return an error for invalid path', async () => {
-    const invalidPath = path.join(testDir, 'invalid<>dir');
+    // Use a path that's guaranteed to be invalid (null byte is always invalid)
+    const invalidPath = path.join(testDir, 'invalid\0dir');
     const result = await mkdir({ path: invalidPath });
 
-    expect(result.status).toBe('error');
-    if (result.status === 'error') {
-      expect(result.warnings).toContain('Unknown error');
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe('access_denied'); // Security validation happens first
     }
   });
 
@@ -101,9 +103,9 @@ describe('mkdir tool', () => {
 
     const result = await mkdir({ path: restrictedPath });
 
-    expect(result.status).toBe('error');
-    if (result.status === 'error') {
-      expect(result.warnings).toContain('Access denied by mock');
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.code).toBe('access_denied');
     }
 
     securityController.validateSecurePath = originalValidateSecurePath; // Restore original

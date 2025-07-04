@@ -1,11 +1,19 @@
 {
-  "name": "smart-fs-mcp",
+  "name": "@zio3/smart-fs-mcp",
   "version": "1.0.0",
-  "description": "LLM-optimized filesystem MCP tool with safety controls and efficient token usage",
+  "description": "Model Context Protocol (MCP) server for LLM-optimized filesystem operations with safety controls. For use with Claude Desktop.",
   "main": "dist/index.js",
   "type": "module",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "jest",
@@ -33,15 +41,32 @@
     "api:start": "node dist/api/server.js"
   },
   "bin": {
-    "smart-fs-test": "dist/cli/index.js"
+    "smart-fs-mcp": "dist/index.js"
   },
+  "files": [
+    "dist/**/*",
+    "docs/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zio3/smart-fs-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zio3/smart-fs-mcp/issues"
+  },
+  "homepage": "https://github.com/zio3/smart-fs-mcp#readme",
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-desktop",
     "filesystem",
     "llm",
-    "model-context-protocol"
+    "file-operations"
   ],
-  "author": "",
+  "author": "zio3 <info@zio3.net>",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

@@ -6,6 +6,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
+import { createUnifiedError, type UnifiedError, ErrorCodes } from '../utils/unified-error-handler.js';
 
 /**
  * mkdirパラメータ
@@ -19,8 +20,9 @@ export interface MkdirParams {
 /**
  * mkdir結果
  */
-export interface MkdirResult {
-  status: 'success' | 'warning' | 'error';
+export interface MkdirSuccessResult {
+  success: true;
+  status: 'success' | 'warning';
   directory_info: {
     path: string;
     resolved_path: string;
@@ -31,6 +33,8 @@ export interface MkdirResult {
   warnings?: string[];
 }
 
+export type MkdirResult = MkdirSuccessResult | UnifiedError;
+
 /**
  * ディレクトリを作成
  */
@@ -38,10 +42,18 @@ export async function mkdir(params: MkdirParams): Promise<MkdirResult> {
   const { path: targetPath, recursive = true, mode = '0755' } = params;
   const security = getSecurityController();
   
+  // パラメータバリデーション
+  if (!targetPath || typeof targetPath !== 'string') {
+    return createUnifiedError(ErrorCodes.MISSING_PATH, 'パスが指定されていません');
+  }
+  
   // セキュリティチェック
   const validation = security.validateSecurePath(targetPath);
   if (!validation.allowed) {
-    throw new Error(validation.reason || 'Access denied');
+    return createUnifiedError(ErrorCodes.ACCESS_DENIED, validation.reason || 'このパスへのアクセスは許可されていません', {
+      attempted_path: targetPath,
+      allowed_directories: security.getAllowedDirectories()
+    });
   }
   
   const resolvedPath = validation.resolved_path;
@@ -144,7 +156,8 @@ export async function mkdir(params: MkdirParams): Promise<MkdirResult> {
       warnings.push('Custom permissions are not fully supported on Windows');
     }
     
-    return {
+    const result: MkdirSuccessResult = {
+      success: true,
       status: warnings.length > 0 ? 'warning' : 'success',
       directory_info: {
         path: targetPath,
@@ -156,37 +169,49 @@ export async function mkdir(params: MkdirParams): Promise<MkdirResult> {
       warnings: warnings.length > 0 ? warnings : undefined
     };
     
+    return result;
+    
   } catch (error) {
     // エラーレスポンス
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     
-    // 一部の親ディレクトリは作成された可能性がある
-    if (parentDirsCreated.length > 0) {
-      warnings.push(`Created ${parentDirsCreated.length} parent directories before error`);
+    // エラーコードの決定
+    let errorCode: keyof typeof ErrorCodes = 'OPERATION_FAILED';
+    if (errorMessage.includes('EEXIST')) {
+      errorCode = 'DESTINATION_EXISTS';
+    } else if (errorMessage.includes('ENOENT') || errorMessage.includes('not found')) {
+      errorCode = 'FILE_NOT_FOUND';
+    } else if (errorMessage.includes('EACCES') || errorMessage.includes('permission') || errorMessage.includes('access')) {
+      errorCode = 'ACCESS_DENIED';
+    } else if (errorMessage.includes('invalid') || errorMessage.includes('illegal')) {
+      errorCode = 'INVALID_PATH';
     }
     
-    return {
-      status: 'error',
-      directory_info: {
-        path: targetPath,
-        resolved_path: resolvedPath,
-        created_new: false,
-        parent_directories_created: parentDirsCreated,
-        final_permissions: mode
-      },
-      warnings: [...warnings, errorMessage]
+    // 一部の親ディレクトリは作成された可能性がある
+    const additionalInfo: any = {
+      attempted_path: targetPath,
+      resolved_path: resolvedPath
     };
+    
+    if (parentDirsCreated.length > 0) {
+      additionalInfo.partial_success = {
+        parent_directories_created: parentDirsCreated,
+        created_count: parentDirsCreated.length
+      };
+    }
+    
+    return createUnifiedError(ErrorCodes[errorCode], errorMessage, additionalInfo);
   }
 }
 
 /**
  * ディレクトリ作成のヘルパー関数（エラーをthrow）
  */
-export async function mkdirOrThrow(params: MkdirParams): Promise<MkdirResult> {
+export async function mkdirOrThrow(params: MkdirParams): Promise<MkdirSuccessResult> {
   const result = await mkdir(params);
   
-  if (result.status === 'error') {
-    const errorMessage = result.warnings?.join('; ') || 'Failed to create directory';
+  if (!result.success) {
+    const errorMessage = result.error.message || 'Failed to create directory';
     throw new Error(errorMessage);
   }
   

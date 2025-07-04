@@ -113,7 +113,7 @@ export const createDirectory = asyncHandler(async (req: Request, res: Response):
   const result = await mkdir(params);
 
   // LLM-optimized response: simple success
-  if (result.status === 'success' || result.status === 'warning') {
+  if (result.success) {
     res.json({ success: true });
   } else {
     // Error case - return detailed failure info
@@ -121,7 +121,7 @@ export const createDirectory = asyncHandler(async (req: Request, res: Response):
       success: false,
       failedInfo: {
         reason: 'directory_creation_failed',
-        message: result.warnings?.join('; ') || 'Failed to create directory',
+        message: result.error.message || 'Failed to create directory',
         solutions: [
           {
             method: 'mkdir',

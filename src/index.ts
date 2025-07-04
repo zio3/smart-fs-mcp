@@ -30,7 +30,7 @@ import { deleteDirectory } from './tools/delete-directory.js';
 import { moveDirectory } from './tools/move-directory.js';
 // Security wrapper imports removed - tools handle validation internally
 import { SAFETY_LIMITS } from './utils/constants.js';
-import type { 
+import type {
   ReadFileParams,
   ReadFileForceParams,
   EnhancedListDirectoryParams,
@@ -74,11 +74,11 @@ class SmartFilesystemMCP {
         },
       }
     );
-    
+
     this.safety = new SafetyController();
     this.securityV2 = getSecurityController();
     this.analyzer = new FileAnalyzer();
-    
+
     this.setupHandlers();
   }
 
@@ -448,43 +448,43 @@ class SmartFilesystemMCP {
         switch (name) {
           case 'read_file':
             return await this.handleReadFile(args as unknown as ReadFileParams);
-            
+
           case 'read_file_force':
             return await this.handleReadFileForce(args as unknown as ReadFileForceParams);
-          
+
           case 'list_directory':
             return await this.handleListDirectory(args as unknown as EnhancedListDirectoryParams);
-          
+
           case 'search_content':
             return await this.handleSearchContent(args as unknown as SearchContentParams);
-          
+
           case 'write_file':
             return await this.handleWriteFile(args as unknown as WriteFileParams);
-          
+
           case 'edit_file':
             return await this.handleEditFile(args as unknown as EditFileParams);
-          
+
           case 'move_file':
             return await this.handleMoveFile(args as unknown as MoveFileParams);
-          
+
           case 'list_allowed_dirs':
             return await this.handleListAllowedDirs();
-          
+
           case 'file_info':
             return await this.handleFileInfo(args as unknown as FileInfoParams);
-          
+
           case 'mkdir':
             return await this.handleMkdir(args as unknown as MkdirParams);
-          
+
           case 'delete_file':
             return await this.handleDeleteFile(args as unknown as DeleteFileParams);
-          
+
           case 'delete_directory':
             return await this.handleDeleteDirectory(args as unknown as DeleteDirectoryParams);
-          
+
           case 'move_directory':
             return await this.handleMoveDirectory(args as unknown as MoveDirectoryParams);
-          
+
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -495,7 +495,7 @@ class SmartFilesystemMCP {
         if (error instanceof McpError) {
           throw error;
         }
-        
+
         // For unexpected errors not handled by tools, return unified error format
         const unifiedError = {
           success: false,
@@ -511,7 +511,7 @@ class SmartFilesystemMCP {
             ]
           }
         };
-        
+
         return {
           content: [{
             type: 'text',
@@ -528,7 +528,7 @@ class SmartFilesystemMCP {
   private async handleReadFile(params: ReadFileParams): Promise<{ content: any[] }> {
     // パスバリデーションは readFile 内で実施される
     const result = await readFile(params, this.safety, this.analyzer);
-    
+
     // エラーの場合も正常にレスポンスを返す
     return {
       content: [{
@@ -537,14 +537,14 @@ class SmartFilesystemMCP {
       }]
     };
   }
-  
+
   /**
    * Handle read_file_force tool
    */
   private async handleReadFileForce(params: ReadFileForceParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await readFileForce(params, this.safety, this.analyzer);
-    
+
     return {
       content: [{
         type: 'text',
@@ -559,7 +559,7 @@ class SmartFilesystemMCP {
   private async handleListDirectory(params: EnhancedListDirectoryParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await listDirectory(params, this.safety);
-    
+
     return {
       content: [{
         type: 'text',
@@ -574,7 +574,7 @@ class SmartFilesystemMCP {
   private async handleSearchContent(params: SearchContentParams): Promise<{ content: any[] }> {
     // Remove parameter validation and old failedInfo handling - let tool handle it
     const result = await searchContent(params, this.safety);
-    
+
     return {
       content: [{
         type: 'text',
@@ -589,7 +589,7 @@ class SmartFilesystemMCP {
   private async handleWriteFile(params: WriteFileParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await writeFile(params, this.safety);
-    
+
     return {
       content: [{
         type: 'text',
@@ -604,7 +604,7 @@ class SmartFilesystemMCP {
   private async handleEditFile(params: EditFileParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await editFile(params, this.safety, this.analyzer);
-    
+
     return {
       content: [{
         type: 'text',
@@ -619,7 +619,7 @@ class SmartFilesystemMCP {
   private async handleMoveFile(params: MoveFileParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await moveFile(params, this.safety);
-    
+
     return {
       content: [{
         type: 'text',
@@ -634,7 +634,7 @@ class SmartFilesystemMCP {
   private async handleListAllowedDirs(): Promise<{ content: any[] }> {
     // 実際のデータを取得してJSON文字列として返す
     const result = await listAllowedDirs();
-    
+
     return {
       content: [{
         type: 'text',
@@ -649,7 +649,7 @@ class SmartFilesystemMCP {
   private async handleFileInfo(params: FileInfoParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await fileInfo(params);
-    
+
     return {
       content: [{
         type: 'text',
@@ -664,7 +664,7 @@ class SmartFilesystemMCP {
   private async handleMkdir(params: MkdirParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await mkdir(params);
-    
+
     return {
       content: [{
         type: 'text',
@@ -679,7 +679,7 @@ class SmartFilesystemMCP {
   private async handleDeleteFile(params: DeleteFileParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await deleteFile(params);
-    
+
     return {
       content: [{
         type: 'text',
@@ -694,7 +694,7 @@ class SmartFilesystemMCP {
   private async handleDeleteDirectory(params: DeleteDirectoryParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await deleteDirectory(params);
-    
+
     return {
       content: [{
         type: 'text',
@@ -709,7 +709,7 @@ class SmartFilesystemMCP {
   private async handleMoveDirectory(params: MoveDirectoryParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await moveDirectory(params);
-    
+
     return {
       content: [{
         type: 'text',
@@ -724,7 +724,7 @@ class SmartFilesystemMCP {
   async start(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    
+
     // Log startup with security info
     const allowedDirs = this.securityV2.getAllowedDirectories();
     console.error('Smart Filesystem MCP Server started');
@@ -738,15 +738,15 @@ async function main() {
   try {
     // Get allowed directories from command line arguments
     const allowedDirs = process.argv.slice(2);
-    
+
     if (allowedDirs.length === 0) {
       allowedDirs.push(process.cwd());
     }
-    
+
     // Initialize security controller with allowed directories
     const { initializeSecurityController } = await import('./core/security-controller-v2.js');
     await initializeSecurityController(allowedDirs);
-    
+
     const server = new SmartFilesystemMCP();
     await server.start();
   } catch (error) {
@@ -776,7 +776,7 @@ if (scriptPath) {
   const normalizedPath = scriptPath.replace(/\\/g, '/');
   const isMainModule = import.meta.url === `file://${normalizedPath}` ||
                       import.meta.url === `file:///${normalizedPath}`;
-  
+
   if (isMainModule) {
     main().catch((error) => {
       console.error('Fatal error:', error);

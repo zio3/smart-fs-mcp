@@ -660,8 +660,9 @@ async function handleMkdir(argv: string[]) {
   const duration = Date.now() - startTime;
 
   // Display result
-  if (result.status === 'error') {
+  if (!result.success) {
     console.log(chalk.red('\n❌ Failed to create directory'));
+    console.log(chalk.red(`Error: ${result.error.message}`));
   } else {
     console.log(chalk.green(`\n✓ Directory ${result.status}:`), result.directory_info.path);
     if (result.directory_info.final_permissions) {
@@ -672,7 +673,7 @@ async function handleMkdir(argv: string[]) {
     }
     if (result.warnings && result.warnings.length > 0) {
       console.log(chalk.yellow('  Warnings:'));
-      result.warnings.forEach(w => console.log(`    - ${w}`));
+      result.warnings.forEach((w: string) => console.log(`    - ${w}`));
     }
   }
 

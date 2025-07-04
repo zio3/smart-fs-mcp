@@ -91,7 +91,7 @@ describe('MCP Server Integration', () => {
 
       const content = JSON.parse(result.content[0].text);
       expect(content.success).toBe(true);
-      expect(content.content).toContain('"name": "smart-fs-mcp"');
+      expect(content.content).toContain('"name": "@zio3/smart-fs-mcp"');
     });
 
     it('should handle size exceeded with proper error format', async () => {

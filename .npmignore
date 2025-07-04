@@ -1,0 +1,38 @@
+# Development files
+src/
+coverage/
+.git/
+.vs/
+.claude/
+__tests__/
+*.test.ts
+*.test.js
+
+# Config files
+.gitignore
+.eslintrc*
+jest.config.*
+tsconfig.json
+nodemon.json
+
+# Documentation source
+CLAUDE.md
+
+# Build artifacts
+*.tsbuildinfo
+*.log
+.DS_Store
+node_modules/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Keep these
+!dist/
+!README.md
+!LICENSE
+!CHANGELOG.md
+!package.json
