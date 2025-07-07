@@ -267,7 +267,7 @@ describe('MCP Server Integration', () => {
       expect(content.success).toBe(true);
       expect(content.exists).toBe(true);
       expect(content.type).toBe('file');
-      expect(content.size).toBeGreaterThan(0);
+      expect(content.file_info.size_bytes).toBeGreaterThan(0);
     });
 
     it('should handle non-existent files', async () => {

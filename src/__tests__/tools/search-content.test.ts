@@ -1,5 +1,6 @@
 // src/__tests__/tools/search-content.test.ts
 
+jest.mock('fs/promises');
 jest.mock('../../core/search-engine.js', () => ({
   searchByContent: jest.fn(),
   searchByFileName: jest.fn(),
@@ -12,10 +13,12 @@ import { SafetyController } from '../../core/safety-controller.js';
 import * as searchEngine from '../../core/search-engine.js';
 import { jest } from '@jest/globals';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 
 const mockSearchByContent = jest.mocked(searchEngine.searchByContent);
 const mockSearchByFileName = jest.mocked(searchEngine.searchByFileName);
 const mockSearchBoth = jest.mocked(searchEngine.searchBoth);
+const mockFs = jest.mocked(fs);
 const mockSafety = {
   validateFileAccess: jest.fn(),
   validateDirectoryAccess: jest.fn(),
@@ -26,6 +29,13 @@ const mockSafety = {
 describe('search-content tool', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    
+    // Mock fs operations for directory existence check
+    mockFs.stat.mockResolvedValue({ 
+      isDirectory: () => true,
+      isFile: () => false 
+    } as any);
+    
     mockSafety.validateDirectoryAccess.mockResolvedValue({ safe: true });
     // Mock enforceTimeout to return the promise result directly
     mockSafety.enforceTimeout.mockImplementation((promise) => promise);
@@ -80,13 +90,19 @@ describe('search-content tool', () => {
   });
 
   test('should handle file pattern search', async () => {
-    const mockSearchResults = [
-      { 
-        file_path: '/test/file.test.ts', 
-        filename_matches: 1,
-        file_size_bytes: 100
-      }
-    ];
+    const mockSearchResults = {
+      matches: [
+        { 
+          file_path: '/test/file.test.ts', 
+          filename_matches: 1,
+          file_size_bytes: 100
+        }
+      ],
+      filesScanned: 1,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    };
     mockSearchByFileName.mockResolvedValue(mockSearchResults);
 
     const result = await searchContent({ 
@@ -102,14 +118,20 @@ describe('search-content tool', () => {
   });
 
   test('should handle combined search', async () => {
-    const mockSearchResults = [
-      { 
-        file_path: '/test/test.ts', 
-        filename_matches: 1,
-        content_matches: 2,
-        file_size_bytes: 200
-      }
-    ];
+    const mockSearchResults = {
+      matches: [
+        { 
+          file_path: '/test/test.ts', 
+          filename_matches: 1,
+          content_matches: 2,
+          file_size_bytes: 200
+        }
+      ],
+      filesScanned: 1,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    };
     mockSearchBoth.mockResolvedValue(mockSearchResults);
 
     const result = await searchContent({ 
@@ -171,7 +193,13 @@ describe('search-content tool', () => {
   });
 
   test('should handle no matches found', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     const result = await searchContent({ 
       content_pattern: 'nonexistent',
@@ -187,7 +215,13 @@ describe('search-content tool', () => {
   });
 
   test('should apply proper defaults for optional parameters', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     await searchContent({ 
       content_pattern: 'test',
@@ -213,7 +247,13 @@ describe('search-content tool', () => {
   });
 
   test('should handle custom parameters correctly', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     await searchContent({ 
       content_pattern: 'test',
@@ -241,18 +281,24 @@ describe('search-content tool', () => {
   });
 
   test('should handle extensions-only search', async () => {
-    const mockSearchResults = [
-      { 
-        file_path: '/test/file.ts', 
-        filename_matches: 1,
-        file_size_bytes: 100
-      },
-      { 
-        file_path: '/test/file2.js', 
-        filename_matches: 1,
-        file_size_bytes: 200
-      }
-    ];
+    const mockSearchResults = {
+      matches: [
+        { 
+          file_path: '/test/file.ts', 
+          filename_matches: 1,
+          file_size_bytes: 100
+        },
+        { 
+          file_path: '/test/file2.js', 
+          filename_matches: 1,
+          file_size_bytes: 200
+        }
+      ],
+      filesScanned: 2,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    };
     mockSearchByFileName.mockResolvedValue(mockSearchResults);
 
     const result = await searchContent({ 
@@ -274,7 +320,13 @@ describe('search-content tool', () => {
   });
 
   test('should use user default exclude dirs by default', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     await searchContent({ 
       content_pattern: 'test',
@@ -294,7 +346,13 @@ describe('search-content tool', () => {
   });
 
   test('should use minimal exclude dirs when userDefaultExcludeDirs is false', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     await searchContent({ 
       content_pattern: 'test',
@@ -312,7 +370,13 @@ describe('search-content tool', () => {
   });
 
   test('should prefer explicit exclude_dirs over userDefaultExcludeDirs', async () => {
-    mockSearchByContent.mockResolvedValue([]);
+    mockSearchByContent.mockResolvedValue({
+      matches: [],
+      filesScanned: 0,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    });
 
     await searchContent({ 
       content_pattern: 'test',
@@ -332,17 +396,21 @@ describe('search-content tool', () => {
 
   describe('binary file handling', () => {
     test('should track binary files skipped count', async () => {
-      const mockSearchResults = [
-        { 
-          file_path: 'test.txt', 
-          content_matches: 1, 
-          content_preview: 'hello world', 
-          file_size_bytes: 12, 
-          last_modified: new Date().toISOString() 
-        }
-      ];
-      // バイナリファイルスキップ数を含める
-      (mockSearchResults as any).binarySkipped = 5;
+      const mockSearchResults = {
+        matches: [
+          { 
+            file_path: 'test.txt', 
+            content_matches: 1, 
+            content_preview: 'hello world', 
+            file_size_bytes: 12, 
+            last_modified: new Date().toISOString() 
+          }
+        ],
+        filesScanned: 1,
+        binarySkipped: 5,
+        directoriesSkipped: 0,
+        encounteredExcludes: []
+      };
       
       mockSearchByContent.mockResolvedValue(mockSearchResults);
 
@@ -360,16 +428,21 @@ describe('search-content tool', () => {
     });
 
     test('should not include binary_files_skipped when zero', async () => {
-      const mockSearchResults = [
-        { 
-          file_path: 'test.txt', 
-          content_matches: 1, 
-          content_preview: 'hello world', 
-          file_size_bytes: 12, 
-          last_modified: new Date().toISOString() 
-        }
-      ];
-      // バイナリファイルスキップ数なし
+      const mockSearchResults = {
+        matches: [
+          { 
+            file_path: 'test.txt', 
+            content_matches: 1, 
+            content_preview: 'hello world', 
+            file_size_bytes: 12, 
+            last_modified: new Date().toISOString() 
+          }
+        ],
+        filesScanned: 1,
+        binarySkipped: 0,
+        directoriesSkipped: 0,
+        encounteredExcludes: []
+      };
       
       mockSearchByContent.mockResolvedValue(mockSearchResults);
 
@@ -387,17 +460,20 @@ describe('search-content tool', () => {
     });
 
     test('should skip binary extensions in file pattern search', async () => {
-      const mockSearchResults = [
-        { 
-          file_path: '/test/code.js', 
-          filename_matches: 1,
-          file_size_bytes: 100, 
-          last_modified: new Date().toISOString() 
-        }
-      ];
-      // .db, .sqlite files were skipped
-      (mockSearchResults as any).binarySkipped = 3;
-      
+      const mockSearchResults = {
+        matches: [
+          { 
+            file_path: '/test/code.js', 
+            filename_matches: 1,
+            file_size_bytes: 100, 
+            last_modified: new Date().toISOString() 
+          }
+        ],
+        filesScanned: 1,
+        binarySkipped: 3,
+        directoriesSkipped: 0,
+        encounteredExcludes: []
+      };
       mockSearchByFileName.mockResolvedValue(mockSearchResults);
 
       const result = await searchContent({ 
@@ -416,13 +492,19 @@ describe('search-content tool', () => {
 
   describe('refinement suggestions', () => {
     test('should not include refinement suggestions when results <= 50', async () => {
-      const mockSearchResults = Array.from({length: 30}, (_, i) => ({ 
-        file_path: `test${i}.txt`, 
-        content_matches: 1, 
-        content_preview: 'hello world', 
-        file_size_bytes: 12, 
-        last_modified: new Date().toISOString() 
-      }));
+      const mockSearchResults = {
+        matches: Array.from({length: 30}, (_, i) => ({ 
+          file_path: `test${i}.txt`, 
+          content_matches: 1, 
+          content_preview: 'hello world', 
+          file_size_bytes: 12, 
+          last_modified: new Date().toISOString() 
+        })),
+        filesScanned: 30,
+        binarySkipped: 0,
+        directoriesSkipped: 0,
+        encounteredExcludes: []
+      };
       
       mockSearchByContent.mockResolvedValue(mockSearchResults);
 
@@ -442,13 +524,19 @@ describe('search-content tool', () => {
     });
 
     test('should include refinement suggestions when results > 50', async () => {
-      const mockSearchResults = Array.from({length: 100}, (_, i) => ({ 
-        file_path: `test${i}.txt`, 
-        content_matches: 1, 
-        content_preview: 'hello world', 
-        file_size_bytes: 12, 
-        last_modified: new Date().toISOString() 
-      }));
+      const mockSearchResults = {
+        matches: Array.from({length: 100}, (_, i) => ({ 
+          file_path: `test${i}.txt`, 
+          content_matches: 1, 
+          content_preview: 'hello world', 
+          file_size_bytes: 12, 
+          last_modified: new Date().toISOString() 
+        })),
+        filesScanned: 100,
+        binarySkipped: 0,
+        directoriesSkipped: 0,
+        encounteredExcludes: []
+      };
       
       mockSearchByContent.mockResolvedValue(mockSearchResults);
 
