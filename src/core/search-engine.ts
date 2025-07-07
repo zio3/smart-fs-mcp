@@ -13,19 +13,10 @@ import {
   // executeRegexWithTimeout,
   // findMatchesWithContext 
 } from '../utils/regex-validator.js';
-// import { isBinaryContent } from '../utils/helpers.js';
+import { KNOWN_BINARY_EXTENSIONS, BINARY_DIRECTORIES } from '../utils/constants.js';
+import { isBinaryContent } from '../utils/helpers.js';
+import type { ExcludedDirectoryInfo } from './types.js';
 // Note: Using any for search results since we removed legacy SearchResult type
-
-/**
- * バイナリファイル拡張子
- */
-const BINARY_EXTENSIONS = new Set([
-  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.webp', '.svg',
-  '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
-  '.exe', '.dll', '.so', '.dylib', '.bin', '.dat',
-  '.mp3', '.mp4', '.avi', '.mov', '.wmv', '.flv',
-  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'
-]);
 
 /**
  * ファイル重要度ルール
@@ -53,6 +44,29 @@ const FILE_IMPORTANCE_RULES = {
 };
 
 /**
+ * 除外ディレクトリの理由マッピング
+ */
+const EXCLUDE_REASONS: Record<string, ExcludedDirectoryInfo['reason']> = {
+  'node_modules': 'performance',
+  '.git': 'security',
+  'dist': 'performance',
+  'build': 'performance',
+  'out': 'performance',
+  '.next': 'performance',
+  'coverage': 'user_default',
+  '__tests__': 'user_default',
+  'test': 'user_default',
+  '.nyc_output': 'user_default',
+  'tmp': 'user_default',
+  'temp': 'user_default',
+  '.vs': 'performance',
+  '.vscode': 'user_default',
+  'bin': 'performance',
+  'obj': 'performance',
+  '__pycache__': 'performance'
+};
+
+/**
  * 検索エンジンオプション
  */
 export interface SearchEngineOptions {
@@ -67,6 +81,7 @@ export interface SearchEngineOptions {
   recursive: boolean;
 }
 
+
 /**
  * ファイル名検索
  */
@@ -74,10 +89,16 @@ export async function searchByFileName(
   rootDir: string,
   pattern: string,
   options: SearchEngineOptions
-): Promise<any[]> {
+): Promise<any> {
   const results: any[] = [];
-  const regex = createFilePathRegex(pattern, options.caseSensitive);
+  const encounteredExcludes: ExcludedDirectoryInfo[] = [];
+  const directoriesSkipped = { value: 0 };
+  
+  // ファイル名検索では通常の正規表現を使用（パス区切り文字の正規化は不要）
+  const flags = options.caseSensitive ? 'g' : 'gi';
+  const regex = new RegExp(pattern, flags);
   const scannedCount = { value: 0 };
+  const binarySkippedCount = { value: 0 };
   
   await scanDirectory(
     rootDir,
@@ -87,10 +108,20 @@ export async function searchByFileName(
     options,
     0,
     scannedCount,
-    'filename'
+    binarySkippedCount,
+    'filename',
+    rootDir,
+    encounteredExcludes,
+    directoriesSkipped
   );
   
-  return results;
+  return {
+    matches: results,
+    filesScanned: scannedCount.value,
+    binarySkipped: binarySkippedCount.value,
+    directoriesSkipped: directoriesSkipped.value,
+    encounteredExcludes
+  };
 }
 
 /**
@@ -100,10 +131,14 @@ export async function searchByContent(
   rootDir: string,
   pattern: string,
   options: SearchEngineOptions
-): Promise<any[]> {
+): Promise<any> {
   const results: any[] = [];
+  const encounteredExcludes: ExcludedDirectoryInfo[] = [];
+  const directoriesSkipped = { value: 0 };
+  
   const regex = createSearchRegex(pattern, options.caseSensitive, options.wholeWord);
   const scannedCount = { value: 0 };
+  const binarySkippedCount = { value: 0 };
   
   await scanDirectory(
     rootDir,
@@ -113,10 +148,20 @@ export async function searchByContent(
     options,
     0,
     scannedCount,
-    'content'
+    binarySkippedCount,
+    'content',
+    rootDir,
+    encounteredExcludes,
+    directoriesSkipped
   );
   
-  return results;
+  return {
+    matches: results,
+    filesScanned: scannedCount.value,
+    binarySkipped: binarySkippedCount.value,
+    directoriesSkipped: directoriesSkipped.value,
+    encounteredExcludes
+  };
 }
 
 /**
@@ -127,11 +172,15 @@ export async function searchBoth(
   filePattern: string | null,
   contentPattern: string | null,
   options: SearchEngineOptions
-): Promise<any[]> {
+): Promise<any> {
   const results: any[] = [];
+  const encounteredExcludes: ExcludedDirectoryInfo[] = [];
+  const directoriesSkipped = { value: 0 };
+  
   const fileRegex = filePattern ? createFilePathRegex(filePattern, options.caseSensitive) : null;
   const contentRegex = contentPattern ? createSearchRegex(contentPattern, options.caseSensitive, options.wholeWord) : null;
   const scannedCount = { value: 0 };
+  const binarySkippedCount = { value: 0 };
   
   await scanDirectory(
     rootDir,
@@ -141,10 +190,20 @@ export async function searchBoth(
     options,
     0,
     scannedCount,
-    'both'
+    binarySkippedCount,
+    'both',
+    rootDir,
+    encounteredExcludes,
+    directoriesSkipped
   );
   
-  return results;
+  return {
+    matches: results,
+    filesScanned: scannedCount.value,
+    binarySkipped: binarySkippedCount.value,
+    directoriesSkipped: directoriesSkipped.value,
+    encounteredExcludes
+  };
 }
 
 /**
@@ -158,7 +217,11 @@ async function scanDirectory(
   options: SearchEngineOptions,
   depth: number,
   scannedCount: { value: number },
-  searchType: 'filename' | 'content' | 'both'
+  binarySkippedCount: { value: number },
+  searchType: 'filename' | 'content' | 'both',
+  rootDir?: string,
+  encounteredExcludes?: ExcludedDirectoryInfo[],
+  directoriesSkipped?: { value: number }
 ): Promise<void> {
   // 深度チェック
   if (!options.recursive && depth > 0) return;
@@ -169,7 +232,28 @@ async function scanDirectory(
   
   // 除外ディレクトリチェック
   const dirName = path.basename(dirPath);
-  if (options.excludeDirs && Array.isArray(options.excludeDirs) && options.excludeDirs.includes(dirName)) return;
+  if (options.excludeDirs && Array.isArray(options.excludeDirs) && options.excludeDirs.includes(dirName)) {
+    // 除外情報を記録
+    if (encounteredExcludes && rootDir) {
+      const relativePath = path.relative(rootDir, dirPath);
+      const reason = EXCLUDE_REASONS[dirName] || 'user_specified';
+      
+      // 重複チェック
+      if (!encounteredExcludes.some(e => e.path === relativePath)) {
+        encounteredExcludes.push({
+          path: relativePath,
+          reason,
+          note: reason === 'user_specified' ? 'Excluded by user configuration' : undefined
+        });
+      }
+    }
+    
+    if (directoriesSkipped) {
+      directoriesSkipped.value++;
+    }
+    
+    return;
+  }
   
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -188,7 +272,11 @@ async function scanDirectory(
           options,
           depth + 1,
           scannedCount,
-          searchType
+          binarySkippedCount,
+          searchType,
+          rootDir,
+          encounteredExcludes,
+          directoriesSkipped
         );
       } else if (entry.isFile()) {
         scannedCount.value++;
@@ -196,8 +284,11 @@ async function scanDirectory(
         // 拡張子フィルタ
         if (!shouldIncludeFile(entry.name, options)) continue;
         
-        // バイナリファイルチェック
-        if (isBinaryFile(entry.name)) continue;
+        // バイナリファイルチェック（フルパスを使用）
+        if (isBinaryFile(fullPath)) {
+          binarySkippedCount.value++;
+          continue;
+        }
         
         // ファイル検索実行
         const result = await searchFile(
@@ -226,7 +317,7 @@ async function searchFile(
   fileRegex: RegExp | null,
   contentRegex: RegExp | null,
   options: SearchEngineOptions,
-  _searchType: 'filename' | 'content' | 'both'
+  searchType: 'filename' | 'content' | 'both'
 ): Promise<any | null> {
   try {
     const stats = await fs.stat(filePath);
@@ -243,22 +334,34 @@ async function searchFile(
     
     // ファイル名検索
     if (fileRegex) {
-      const matches = filePath.match(fileRegex);
-      filenameMatches = matches ? matches.length : 0;
+      // ファイル名のみを抽出してマッチング
+      const fileName = path.basename(filePath);
+      const matches = fileName.match(fileRegex);
+      filenameMatches = matches ? 1 : 0; // ファイル名マッチは0か1のみ
+      
+      // デバッグ用（本番では削除）
+      // console.log('File pattern:', fileRegex.source, 'Test file:', fileName, 'Match result:', matches !== null);
     }
     
     // 内容検索
     let matchedStrings: string[] | undefined;
+    let lineMatches: Array<{ content: string; lineNo: number }> | undefined;
     if (contentRegex) {
       const contentResult = await searchFileContent(filePath, contentRegex, options.maxMatchesPerFile);
       contentMatches = contentResult.matchCount;
       contentPreview = contentResult.preview;
       matchContext = contentResult.context;
       matchedStrings = contentResult.matchedStrings;
+      lineMatches = contentResult.lineMatches;
     }
     
     // 結果がない場合はnull
-    if (filenameMatches === 0 && contentMatches === 0) {
+    // ただし、ファイル名検索のみの場合はファイル名マッチのみを確認
+    if (searchType === 'filename' && filenameMatches === 0) {
+      return null;
+    } else if (searchType === 'content' && contentMatches === 0) {
+      return null;
+    } else if (searchType === 'both' && filenameMatches === 0 && contentMatches === 0) {
       return null;
     }
     
@@ -270,7 +373,8 @@ async function searchFile(
       last_modified: stats.mtime.toISOString(),
       content_preview: contentPreview,
       match_context: matchContext,
-      matchedStrings: matchedStrings
+      matchedStrings: matchedStrings,
+      lineMatches: lineMatches
     };
     
   } catch (error) {
@@ -356,14 +460,17 @@ async function searchFileContent(
   filePath: string,
   regex: RegExp,
   maxMatches: number
-): Promise<{ matchCount: number; preview?: string; context?: string[]; matchedStrings?: string[] }> {
+): Promise<{ matchCount: number; preview?: string; context?: string[]; matchedStrings?: string[]; lineMatches?: Array<{ content: string; lineNo: number }> }> {
   return new Promise((resolve) => {
     let matchCount = 0;
     let preview: string | undefined;
     const contextLines: string[] = [];
     const matchedStrings: string[] = [];
+    const lineMatches: Array<{ content: string; lineNo: number }> = [];
     const lines: string[] = [];
     let lineNumber = 0;
+    let binaryDetected = false;
+    let firstFewLines = '';
     
     const rl = readline.createInterface({
       input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -371,6 +478,15 @@ async function searchFileContent(
     });
     
     rl.on('line', (line) => {
+      // 最初の数行でバイナリチェック
+      if (lineNumber < 5) {
+        firstFewLines += line + '\n';
+        if (isBinaryContent(Buffer.from(firstFewLines))) {
+          binaryDetected = true;
+          rl.close();
+          return;
+        }
+      }
       lineNumber++;
       lines.push(line);
       
@@ -404,6 +520,14 @@ async function searchFileContent(
         }
       }
       
+      // 行番号付きでマッチ情報を記録
+      if (hasMatch) {
+        lineMatches.push({
+          content: line.trim(),
+          lineNo: lineNumber
+        });
+      }
+      
       if (hasMatch) {
         // コンテキストを保存（最大3セット）
         if (contextLines.length < 9) { // 3セット × 3行
@@ -421,11 +545,18 @@ async function searchFileContent(
     });
     
     rl.on('close', () => {
+      // バイナリファイルが検出された場合は空の結果を返す
+      if (binaryDetected) {
+        resolve({ matchCount: 0 });
+        return;
+      }
+      
       resolve({
         matchCount,
         preview,
         context: contextLines.length > 0 ? contextLines.slice(0, 9) : undefined,
-        matchedStrings: matchedStrings.length > 0 ? matchedStrings : undefined
+        matchedStrings: matchedStrings.length > 0 ? matchedStrings : undefined,
+        lineMatches: lineMatches.length > 0 ? lineMatches : undefined
       });
     });
     
@@ -447,7 +578,11 @@ function shouldIncludeFile(fileName: string, options: SearchEngineOptions): bool
   }
   
   // 対象拡張子が指定されている場合
-  if (options.extensions && options.extensions.length > 0) {
+  if (options.extensions) {
+    // 空配列の場合は拡張子なしファイルのみを対象とする
+    if (options.extensions.length === 0) {
+      return ext === '';
+    }
     // 拡張子リストに含まれているかチェック（ドット付き・なし両対応）
     return options.extensions.some(e => {
       const targetExt = e.startsWith('.') ? e : `.${e}`;
@@ -459,11 +594,18 @@ function shouldIncludeFile(fileName: string, options: SearchEngineOptions): bool
 }
 
 /**
- * バイナリファイルかどうかの判定
+ * バイナリファイルかどうかの判定（拡張版）
  */
-function isBinaryFile(fileName: string): boolean {
-  const ext = path.extname(fileName).toLowerCase();
-  return BINARY_EXTENSIONS.has(ext);
+function isBinaryFile(filePath: string): boolean {
+  // 拡張子による判定
+  const ext = path.extname(filePath).toLowerCase();
+  if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
+    return true;
+  }
+  
+  // ディレクトリによる判定
+  const parts = filePath.split(path.sep);
+  return parts.some(part => BINARY_DIRECTORIES.has(part));
 }
 
 /**

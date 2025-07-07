@@ -220,6 +220,25 @@ export const BINARY_SIGNATURES = {
   // Documents
   PDF: Buffer.from([0x25, 0x50, 0x44, 0x46]),
   DOCX: Buffer.from([0x50, 0x4B, 0x03, 0x04]), // Same as ZIP
+  
+  // データベース関連（新規追加）
+  SQLITE: Buffer.from([0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20]), // "SQLite "
+  SQLITE3: Buffer.from([0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33]), // "SQLite format 3"
+  
+  // Microsoft Office関連
+  MS_OFFICE: Buffer.from([0xD0, 0xCF, 0x11, 0xE0]), // OLE2 Compound Document
+  
+  // 音声・動画
+  MP4_FTYP: Buffer.from([0x66, 0x74, 0x79, 0x70]), // "ftyp" (offset 4)
+  AVI: Buffer.from([0x52, 0x49, 0x46, 0x46]), // "RIFF" (AVI/WAV)
+  MP3_ID3: Buffer.from([0x49, 0x44, 0x33]), // ID3
+  
+  // フォント
+  TTF: Buffer.from([0x00, 0x01, 0x00, 0x00]),
+  OTF: Buffer.from([0x4F, 0x54, 0x54, 0x4F]), // "OTTO"
+  
+  // Java関連
+  CLASS: Buffer.from([0xCA, 0xFE, 0xBA, 0xBE]), // Java .class
 } as const;
 
 /**
@@ -321,3 +340,67 @@ export const CLI_DISPLAY = {
     muted: 'gray',
   },
 } as const;
+
+/**
+ * 確実にバイナリと判定すべき拡張子
+ * 事前フィルタリングに使用し、ファイル読み込みを回避
+ */
+export const KNOWN_BINARY_EXTENSIONS = new Set([
+  // 実行ファイル・ライブラリ
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.app',
+  '.msi', '.deb', '.rpm', '.dmg',
+  
+  // 画像ファイル
+  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', 
+  '.tiff', '.tga', '.ico', '.icns', '.svg',
+  
+  // 動画・音声ファイル
+  '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv',
+  '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma',
+  
+  // アーカイブ・圧縮ファイル
+  '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2',
+  '.xz', '.lzma', '.cab', '.iso',
+  
+  // データベースファイル
+  '.db', '.sqlite', '.sqlite3', '.mdb', '.accdb',
+  '.dbf', '.sdf',
+  
+  // オフィス文書（バイナリ形式）
+  '.doc', '.xls', '.ppt', '.docx', '.xlsx', '.pptx',
+  '.pdf', '.rtf', '.odt', '.ods', '.odp',
+  
+  // フォントファイル
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  
+  // 開発関連バイナリ
+  '.pyc', '.pyo', '.class', '.jar', '.war', '.ear',
+  '.o', '.obj', '.lib', '.a',
+  
+  // Visual Studio関連
+  '.pdb', '.idb', '.suo', '.user', '.cache',
+  
+  // その他
+  '.swf', '.fla', '.psd', '.ai', '.sketch',
+  '.dat', '.db3'
+]);
+
+/**
+ * バイナリファイルが格納される可能性の高いディレクトリ
+ * ディレクトリレベルでの事前除外に使用
+ */
+export const BINARY_DIRECTORIES = new Set([
+  '.vs',           // Visual Studio
+  '.vscode',       // VS Code
+  'bin',           // バイナリ出力
+  'obj',           // オブジェクトファイル
+  'Debug',         // デバッグビルド
+  'Release',       // リリースビルド
+  '.git',          // Git（既存）
+  'node_modules',  // Node.js（既存）
+  '__pycache__',   // Python
+  '.gradle',       // Gradle
+  'target',        // Maven/Rust
+  'dist',          // Distribution（既存）
+  'build'          // Build output（既存）
+]);

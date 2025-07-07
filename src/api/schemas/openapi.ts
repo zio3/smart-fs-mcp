@@ -348,23 +348,16 @@ browser testing via SwaggerUI and CURL-based testing for development.
                     summary: 'ファイルが見つからない',
                     value: {
                       success: false,
-                      failedInfo: {
-                        reason: 'not_found',
+                      error: {
+                        code: 'file_not_found',
                         message: 'ファイルまたはディレクトリが見つかりません',
-                        solutions: [
-                          {
-                            method: 'list_directory',
-                            params: { path: '/home/user/project' },
-                            description: '親ディレクトリの内容を確認'
-                          },
-                          {
-                            method: 'search_content',
-                            params: {
-                              file_pattern: 'missing.txt',
-                              directory: '/home/user/project'
-                            },
-                            description: '類似名のファイルを検索'
-                          }
+                        details: {
+                          operation: 'read_file',
+                          path: '/home/user/project/missing.txt'
+                        },
+                        suggestions: [
+                          '親ディレクトリの内容を確認してください',
+                          '類似名のファイルを検索してください'
                         ]
                       }
                     }
@@ -383,32 +376,42 @@ browser testing via SwaggerUI and CURL-based testing for development.
       get: {
         tags: ['Files'],
         summary: 'Read file content with unified force parameter (LLM cognitive load reduction)',
-        description: `ファイル内容を読み取ります。LLMの認知的負荷軽減のため単一エンドポイントで統一：
+        description: `ファイル内容を読み取ります。行番号指定による部分読み込みが可能です。
 
-**通常モード (force=false)**
+**通常モード**
 - サイズ制限: 20KB以下
 - 制限内なら内容を返す
-- サイズ超過時は詳細情報 + force=true での再実行提案
+- サイズ超過時は部分読み込みを提案
 
-**強制モード (force=true)**  
-- サイズ制限: 256KB以下（環境変数で制御）
-- 制限を無視して読み取り
-- 成功時は警告付きレスポンス
+**部分読み込みモード**
+- start_line/end_lineで範囲指定
+- 指定範囲のみ読み取り
+- 大容量ファイルの効率的な読み取り
 
 **自動ワークフロー**
 1. 通常読み取り試行
-2. サイズ超過時は詳細情報表示
-3. LLMが force=true で再実行`,
+2. サイズ超過時は部分読み込み提案
+3. search_contentで対象範囲を特定後、部分読み込み`,
         parameters: [
           { $ref: '#/components/parameters/AbsolutePath' },
           {
-            name: 'force',
+            name: 'start_line',
             in: 'query',
             required: false,
-            description: 'サイズ制限を無視して強制読み取り（最大256KB、環境変数で制御）',
+            description: '読み取り開始行番号（1から開始、未指定時は1）',
             schema: {
-              type: 'boolean',
-              default: false
+              type: 'integer',
+              minimum: 1
+            }
+          },
+          {
+            name: 'end_line',
+            in: 'query',
+            required: false,
+            description: '読み取り終了行番号（未指定時は最終行まで）',
+            schema: {
+              type: 'integer',
+              minimum: 1
             }
           },
           {
@@ -433,67 +436,68 @@ browser testing via SwaggerUI and CURL-based testing for development.
                 },
                 examples: {
                   success: {
-                    summary: '読み取り成功',
+                    summary: '読み取り成功（全体）',
                     value: {
                       success: true,
-                      content: "console.log('Hello World!');"
+                      content: "console.log('Hello World!');",
+                      file_info: {
+                        total_lines: 1,
+                        returned_lines: 1,
+                        line_range: {
+                          start: 1,
+                          end: 1
+                        }
+                      }
+                    }
+                  },
+                  partial_success: {
+                    summary: '部分読み取り成功',
+                    value: {
+                      success: true,
+                      content: "function processData(data) {\n  // Process logic here\n  return data.map(item => item * 2);\n}",
+                      file_info: {
+                        total_lines: 150,
+                        returned_lines: 4,
+                        line_range: {
+                          start: 42,
+                          end: 45
+                        }
+                      }
                     }
                   },
                   size_exceeded: {
-                    summary: 'サイズ超過（force=trueで解決）',
+                    summary: 'サイズ超過（部分読み込み提案）',
                     value: {
                       success: false,
                       failedInfo: {
-                        reason: 'size_exceeded',
+                        reason: 'file_too_large',
                         message: 'ファイルサイズ（150 KB）が制限（20 KB）を超えています',
                         file_info: {
-                          size_kb: 150,
-                          estimated_tokens: 3750,
-                          file_type: 'code',
-                          is_binary: false
+                          total_lines: 5000,
+                          size_bytes: 153600,
+                          estimated_tokens: 38400
                         },
                         preview: {
-                          first_lines: [
+                          lines: [
                             "import React from 'react';",
-                            "import { useState, useEffect } from 'react';"
-                          ],
-                          summary: 'React TypeScript component'
+                            "import { useState, useEffect } from 'react';",
+                            "import { API } from './api';"
+                          ]
                         },
-                        solutions: [
-                          {
-                            method: 'read_file',
-                            params: {
-                              path: 'C:/Users/info/source/smart-fs-mcp/medium-component.tsx',
-                              force: true
-                            },
-                            description: '制限を無視して強制読み取り（上限: 256KB）',
-                            priority: 'high'
-                          },
-                          {
-                            method: 'search_content',
-                            params: {
-                              file_pattern: 'medium-component.tsx',
-                              content_pattern: 'export.*|function.*|const.*='
-                            },
-                            description: '特定の関数やエクスポートのみ検索',
-                            priority: 'medium'
-                          }
-                        ]
+                        alternatives: {
+                          partial_read_available: true,
+                          suggestions: [
+                            'Use start_line and end_line parameters to read specific sections',
+                            'Example: start_line=1, end_line=500 (reads first 500 lines)',
+                            'Example: start_line=2500, end_line=3000 (reads middle section)',
+                            'Use search_content to find specific patterns and locate target sections',
+                            'Use search_content with content_pattern to identify relevant line numbers first',
+                            'Combine search_content + read_file with line ranges for efficient targeted reading'
+                          ]
+                        }
                       }
                     }
                   },
-                  force_read_success: {
-                    summary: '強制読み取り成功（警告付き）',
-                    value: {
-                      success: true,
-                      content: "import React from 'react';\n// ... 150KB of component code ...",
-                      warning: {
-                        message: '中程度ファイル（150 KB）を強制読み取りしました',
-                        size_kb: 150,
-                        estimated_tokens: 3750
-                      }
-                    }
-                  }
                 }
               }
             }
@@ -616,7 +620,17 @@ Start with simple replacement. Use regex only when multiple patterns need unifie
                             },
                             pattern: { 
                               type: 'string',
-                              description: '正規表現パターン',
+                              description: `JavaScript正規表現パターン
+
+⚠️ **重要制限**: JavaScript標準正規表現エンジンを使用
+- \\w文字クラス: ASCII文字のみ [a-zA-Z0-9_] 対象
+- 日本語文字: \\wではマッチしません
+- 日本語対応: [\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF\\w]+ を使用
+
+**パターン例**:
+- ASCII文字: function\\w+ 
+- 日本語対応: テスト[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF\\w]+
+- 汎用単語: [^\\s]+ (空白以外)`,
                               example: 'const\\s+user\\d+\\s*='
                             },
                             replacement: { 
@@ -1664,8 +1678,24 @@ Use this for safe directory deletion with clear error handling.
               schema: {
                 type: 'object',
                 properties: {
-                  file_pattern: { type: 'string', description: 'Regex pattern for filenames' },
-                  content_pattern: { type: 'string', description: 'Regex pattern for file contents' },
+                  file_pattern: { 
+                    type: 'string', 
+                    description: `JavaScript正規表現パターン (ファイル名検索用)
+
+一般的にファイル名はASCII文字が多いため\\wが使用可能
+例: .*\\.test\\.ts$ (テストファイル), config\\w*\\.(json|yml)` 
+                  },
+                  content_pattern: { 
+                    type: 'string', 
+                    description: `JavaScript正規表現パターン (ファイル内容検索用)
+
+⚠️ **日本語文字の注意**: 
+- \\w は ASCII文字のみ ([a-zA-Z0-9_])
+- 日本語対応: [\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF\\w]+
+- 簡易版: [^\\s]+ (空白以外の文字)
+
+例: TODO|FIXME (英語), テスト[^\\s]+ (日本語)` 
+                  },
                   directory: { $ref: '#/components/schemas/AbsolutePathProperty' },
                   recursive: { type: 'boolean', default: true },
                   max_depth: { type: 'number', default: 10 },
@@ -1708,17 +1738,66 @@ Use this for safe directory deletion with clear error handling.
                       matches: [
                         {
                           file: './src/auth.js',
-                          matchCount: 5,
+                          matchCount: 3,
                           fileSize: 12480,
-                          contents: ['validateUser', 'UserService', 'checkPermission']
+                          lines: [
+                            { content: '// TODO: Implement proper password hashing', lineNo: 15 },
+                            { content: '  // TODO: Add rate limiting for login attempts', lineNo: 42 },
+                            { content: '    // TODO: Log security events', lineNo: 67 }
+                          ]
                         },
                         {
                           file: './utils/helpers.js',
                           matchCount: 2,
                           fileSize: 3241,
-                          contents: ['formatDate', 'parseJSON']
+                          lines: [
+                            { content: '// TODO: Add timezone support', lineNo: 8 },
+                            { content: '  // TODO: Handle malformed JSON gracefully', lineNo: 23 }
+                          ]
                         }
-                      ]
+                      ],
+                      search_type: 'content',
+                      search_stats: {
+                        files_scanned: 45,
+                        files_with_matches: 2,
+                        total_matches: 5,
+                        detailed_results: 2,
+                        simplified_results: 0
+                      }
+                    }
+                  },
+                  many_matches: {
+                    summary: '多数マッチ（+N more表示）',
+                    value: {
+                      success: true,
+                      matches: [
+                        {
+                          file: './src/core/search-engine.ts',
+                          matchCount: 15,
+                          fileSize: 45678,
+                          lines: [
+                            { content: 'export function searchByFileName(rootDir: string, pattern: string) {', lineNo: 73 },
+                            { content: '  const regex = createFilePathRegex(pattern, options.caseSensitive);', lineNo: 75 },
+                            { content: 'export async function searchByContent(rootDir: string, pattern: string) {', lineNo: 99 },
+                            { content: '  const regex = createSearchRegex(pattern, options.caseSensitive, options.wholeWord);', lineNo: 101 },
+                            { content: 'function searchFile(filePath: string, fileRegex: RegExp | null) {', lineNo: 224 },
+                            { content: '  if (fileRegex) {', lineNo: 245 },
+                            { content: '    const matches = filePath.match(fileRegex);', lineNo: 246 },
+                            { content: 'async function searchFileContent(filePath: string, regex: RegExp) {', lineNo: 358 },
+                            { content: '      const matches = line.matchAll(globalRegex);', lineNo: 388 },
+                            { content: '      for (const match of matches) {', lineNo: 391 },
+                            '+5 more'
+                          ]
+                        }
+                      ],
+                      search_type: 'content',
+                      search_stats: {
+                        files_scanned: 150,
+                        files_with_matches: 1,
+                        total_matches: 15,
+                        detailed_results: 1,
+                        simplified_results: 0
+                      }
                     }
                   },
                   no_matches: {
@@ -1852,47 +1931,62 @@ Use this for safe directory deletion with clear error handling.
       },
       ErrorResponse: {
         type: 'object',
-        required: ['success', 'failedInfo'],
+        required: ['success', 'error'],
         properties: {
           success: {
             type: 'boolean',
             enum: [false],
             description: 'Operation failed'
           },
-          failedInfo: {
+          error: {
             type: 'object',
-            required: ['reason', 'message', 'solutions'],
+            required: ['code', 'message', 'details', 'suggestions'],
             properties: {
-              reason: {
+              code: {
                 type: 'string',
-                description: 'Specific failure reason',
+                description: 'エラーコード',
                 enum: [
-                  'not_found',
-                  'permission_denied', 
-                  'validation_error',
-                  'size_exceeded',
-                  'binary_file',
-                  'route_not_found',
+                  'missing_path',
+                  'path_not_absolute',
+                  'invalid_path',
+                  'file_not_found',
+                  'access_denied',
+                  'invalid_parameter',
+                  'operation_failed',
+                  'pattern_not_found',
+                  'directory_not_empty',
                   'unknown_error'
                 ]
               },
               message: {
                 type: 'string',
-                description: 'Human-readable error message'
-              },
-              solutions: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/Solution' },
-                description: 'Prioritized solutions to resolve the error'
-              },
-              error_code: {
-                type: 'string',
-                description: 'Optional technical error code',
-                example: 'ENOENT'
+                description: '日本語エラーメッセージ'
               },
               details: {
                 type: 'object',
-                description: 'Additional error details (development mode only)'
+                description: 'エラーの詳細情報',
+                properties: {
+                  operation: {
+                    type: 'string',
+                    description: '実行された操作'
+                  },
+                  path: {
+                    type: 'string',
+                    description: '対象パス'
+                  },
+                  error_code: {
+                    type: 'string',
+                    description: 'システムエラーコード（例: ENOENT）'
+                  }
+                },
+                additionalProperties: true
+              },
+              suggestions: {
+                type: 'array',
+                items: {
+                  type: 'string'
+                },
+                description: '解決策の提案'
               }
             },
             additionalProperties: false
@@ -1901,18 +1995,18 @@ Use this for safe directory deletion with clear error handling.
         additionalProperties: false,
         example: {
           success: false,
-          failedInfo: {
-            reason: 'not_found',
-            message: 'ファイルまたはディレクトリが見つかりません',
-            solutions: [
-              {
-                method: 'list_directory',
-                params: { path: '/parent/directory' },
-                description: '親ディレクトリの内容を確認',
-                priority: 'high'
-              }
-            ],
-            error_code: 'ENOENT'
+          error: {
+            code: 'file_not_found',
+            message: 'ファイルが見つかりません: /path/to/file.txt',
+            details: {
+              operation: 'read_file',
+              path: '/path/to/file.txt',
+              error_code: 'ENOENT'
+            },
+            suggestions: [
+              'ファイルパスを確認してください',
+              '親ディレクトリの内容を確認してください'
+            ]
           }
         }
       },
@@ -1920,7 +2014,7 @@ Use this for safe directory deletion with clear error handling.
       ReadFileResponse: {
         oneOf: [
           { $ref: '#/components/schemas/ReadFileSuccess' },
-          { $ref: '#/components/schemas/ReadFileFailure' }
+          { $ref: '#/components/schemas/ErrorResponse' }
         ]
       },
       ReadFileSuccess: {
@@ -1934,6 +2028,29 @@ Use this for safe directory deletion with clear error handling.
           content: {
             type: 'string',
             description: 'ファイルの内容'
+          },
+          file_info: {
+            type: 'object',
+            description: 'ファイル情報（行範囲指定時のみ）',
+            properties: {
+              total_lines: {
+                type: 'number',
+                description: 'ファイルの総行数'
+              },
+              returned_lines: {
+                type: 'number',
+                description: '返された行数'
+              },
+              line_range: {
+                type: 'object',
+                properties: {
+                  start: { type: 'number' },
+                  end: { type: 'number' }
+                },
+                required: ['start', 'end']
+              }
+            },
+            required: ['total_lines', 'returned_lines', 'line_range']
           }
         },
         additionalProperties: false,
@@ -1941,56 +2058,6 @@ Use this for safe directory deletion with clear error handling.
           success: true,
           content: "console.log('Hello World!');"
         }
-      },
-      ReadFileFailure: {
-        type: 'object',
-        required: ['success', 'failedInfo'],
-        properties: {
-          success: {
-            type: 'boolean',
-            enum: [false]
-          },
-          failedInfo: {
-            type: 'object',
-            required: ['reason', 'message', 'solutions'],
-            properties: {
-              reason: {
-                type: 'string',
-                enum: ['size_exceeded', 'binary_file', 'not_found', 'permission_denied']
-              },
-              message: {
-                type: 'string'
-              },
-              file_size: {
-                type: 'number'
-              },
-              file_type: {
-                type: 'string'
-              },
-              solutions: {
-                type: 'array',
-                items: {
-                  $ref: '#/components/schemas/Solution'
-                }
-              },
-              preview: {
-                type: 'object',
-                properties: {
-                  first_lines: {
-                    type: 'array',
-                    items: {
-                      type: 'string'
-                    }
-                  },
-                  summary: {
-                    type: 'string'
-                  }
-                }
-              }
-            }
-          }
-        },
-        additionalProperties: false
       },
       Solution: {
         type: 'object',
@@ -2011,19 +2078,36 @@ Use this for safe directory deletion with clear error handling.
           }
         },
         example: {
-          method: 'force_read_file',
+          method: 'search_content',
           params: {
-            path: './large-file.tsx',
-            acknowledge_risk: true,
-            max_size_mb: 50
+            content_pattern: 'TODO|FIXME',
+            directory: '/absolute/path/to/project'
           },
-          description: '制限を無視して強制読み取り'
+          description: '特定のパターンを検索'
         }
       },
       // Simple Search Schemas
+      LineMatch: {
+        type: 'object',
+        required: ['content', 'lineNo'],
+        properties: {
+          content: {
+            type: 'string',
+            description: 'マッチした行の内容'
+          },
+          lineNo: {
+            type: 'number',
+            description: '行番号（1ベース）'
+          }
+        },
+        example: {
+          content: 'function validateUser(username, password) {',
+          lineNo: 42
+        }
+      },
       SearchMatch: {
         type: 'object',
-        required: ['file', 'matchCount', 'fileSize', 'contents'],
+        required: ['file', 'matchCount', 'fileSize'],
         properties: {
           file: {
             type: 'string',
@@ -2037,29 +2121,40 @@ Use this for safe directory deletion with clear error handling.
             type: 'number',
             description: 'ファイルサイズ（バイト）'
           },
-          contents: {
+          lines: {
             type: 'array',
-            items: { type: 'string' },
-            description: '抽出されたキーワード（関数名・クラス名等）',
-            maxItems: 5
+            description: 'マッチした行情報（最大10件、それ以上は"+N more"表示）',
+            items: {
+              oneOf: [
+                { $ref: '#/components/schemas/LineMatch' },
+                { type: 'string', pattern: '^\\+\\d+ more$' }
+              ]
+            },
+            maxItems: 11
           }
         },
         example: {
           file: './src/auth.js',
           matchCount: 5,
           fileSize: 12480,
-          contents: ['validateUser', 'UserService', 'checkPermission']
+          lines: [
+            { content: 'function validateUser(username, password) {', lineNo: 42 },
+            { content: '  const user = await UserService.find(username);', lineNo: 43 },
+            { content: '  if (!user || !checkPermission(user)) {', lineNo: 44 },
+            { content: '    throw new Error("Invalid user");', lineNo: 45 },
+            { content: '  return user;', lineNo: 47 }
+          ]
         }
       },
       SearchContentResponse: {
         oneOf: [
           { $ref: '#/components/schemas/SearchContentSuccess' },
-          { $ref: '#/components/schemas/SearchContentFailure' }
+          { $ref: '#/components/schemas/ErrorResponse' }
         ]
       },
       SearchContentSuccess: {
         type: 'object',
-        required: ['success', 'matches'],
+        required: ['success', 'matches', 'search_type', 'search_stats'],
         properties: {
           success: {
             type: 'boolean',
@@ -2068,31 +2163,35 @@ Use this for safe directory deletion with clear error handling.
           matches: {
             type: 'array',
             items: { $ref: '#/components/schemas/SearchMatch' }
-          }
-        },
-        additionalProperties: false
-      },
-      SearchContentFailure: {
-        type: 'object',
-        required: ['success', 'failedInfo'],
-        properties: {
-          success: {
-            type: 'boolean',
-            enum: [false]
           },
-          failedInfo: {
+          search_type: {
+            type: 'string',
+            enum: ['filename', 'content', 'both'],
+            description: '検索タイプ'
+          },
+          search_stats: {
             type: 'object',
-            required: ['reason', 'message', 'solutions'],
+            required: ['files_scanned', 'files_with_matches', 'total_matches', 'detailed_results', 'simplified_results'],
             properties: {
-              reason: {
-                type: 'string'
+              files_scanned: {
+                type: 'number',
+                description: 'スキャンしたファイル数'
               },
-              message: {
-                type: 'string'
+              files_with_matches: {
+                type: 'number',
+                description: 'マッチが見つかったファイル数'
               },
-              solutions: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/Solution' }
+              total_matches: {
+                type: 'number',
+                description: '総マッチ数'
+              },
+              detailed_results: {
+                type: 'number',
+                description: '詳細結果表示数（最大20）'
+              },
+              simplified_results: {
+                type: 'number',
+                description: '簡略結果表示数（21以降）'
               }
             }
           }
@@ -2100,65 +2199,7 @@ Use this for safe directory deletion with clear error handling.
         additionalProperties: false
       },
       PathValidationErrorResponse: {
-        type: 'object',
-        required: ['success', 'failedInfo'],
-        properties: {
-          success: {
-            type: 'boolean',
-            enum: [false],
-            description: 'Operation failed due to path validation error'
-          },
-          failedInfo: {
-            type: 'object',
-            required: ['reason', 'message', 'provided_path', 'absolute_path', 'solutions'],
-            properties: {
-              reason: {
-                type: 'string',
-                enum: ['path_not_absolute'],
-                description: 'Specific reason for validation failure'
-              },
-              message: {
-                type: 'string',
-                description: 'Human-readable error message in Japanese',
-                example: '相対パスは受け付けません。絶対パスを使用してください。（BREAKING CHANGE）'
-              },
-              provided_path: {
-                type: 'string',
-                description: 'The relative path that was provided',
-                example: './src/index.js'
-              },
-              absolute_path: {
-                type: 'string',
-                description: 'The suggested absolute path to use instead',
-                example: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js'
-              },
-              solutions: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/Solution' },
-                description: 'Prioritized solutions to fix the path validation error'
-              }
-            },
-            additionalProperties: false
-          }
-        },
-        additionalProperties: false,
-        example: {
-          success: false,
-          failedInfo: {
-            reason: 'path_not_absolute',
-            message: '相対パスは受け付けません。絶対パスを使用してください。（BREAKING CHANGE）',
-            provided_path: './src/index.js',
-            absolute_path: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js',
-            solutions: [
-              {
-                method: 'read_file',
-                params: { path: '/mnt/c/Users/info/source/smart-fs-mcp/src/index.js' },
-                description: '絶対パス「/mnt/c/Users/info/source/smart-fs-mcp/src/index.js」で再実行',
-                priority: 'high'
-              }
-            ]
-          }
-        }
+        $ref: '#/components/schemas/ErrorResponse'
       }
     },
     responses: {

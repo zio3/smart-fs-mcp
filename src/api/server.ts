@@ -179,34 +179,22 @@ class SmartFilesystemAPI {
       res.json(openApiSpec);
     });
 
-    // 404 handler (BREAKING CHANGE: failedInfo format only)
+    // 404 handler (unified error format)
     this.app.use('*', (req, res) => {
       res.status(404).json({
         success: false,
-        failedInfo: {
-          reason: 'route_not_found',
+        error: {
+          code: 'route_not_found',
           message: `Route ${req.method} ${req.originalUrl} not found`,
-          solutions: [
-            {
-              method: 'check_documentation',
-              params: { url: '/api-docs' },
-              description: 'SwaggerUIで利用可能なエンドポイントを確認',
-              priority: 'high'
-            },
-            {
-              method: 'api_info',
-              params: { endpoint: '/api' },
-              description: 'API情報エンドポイントで利用可能なルートを確認',
-              priority: 'medium'
-            },
-            {
-              method: 'health_check',
-              params: { endpoint: '/health' },
-              description: 'サーバーの動作状況を確認',
-              priority: 'low'
-            }
-          ],
-          error_code: 'NOT_FOUND'
+          details: {
+            method: req.method,
+            path: req.originalUrl
+          },
+          suggestions: [
+            'SwaggerUIで利用可能なエンドポイントを確認してください (/api-docs)',
+            'APIエンドポイント一覧を確認してください (/api)',
+            'サーバーの動作状況を確認してください (/health)'
+          ]
         }
       });
     });

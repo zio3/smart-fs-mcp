@@ -4,10 +4,12 @@
  */
 
 import * as path from 'path';
-import type { PrioritizedSolution } from '../core/types.js';
+import { createUnifiedError, ErrorCodes } from './unified-error-handler.js';
+import type { UnifiedError } from './unified-error-handler.js';
 
 /**
  * パス検証エラーレスポンス
+ * @deprecated Use UnifiedError instead
  */
 export interface PathValidationError {
   success: false;
@@ -16,7 +18,7 @@ export interface PathValidationError {
     message: string;
     provided_path: string;
     absolute_path: string;
-    solutions: PrioritizedSolution[];
+    solutions: any[];
   };
 }
 
@@ -26,7 +28,7 @@ export interface PathValidationError {
 export interface PathValidationResult {
   isValid: boolean;
   absolutePath: string;
-  error?: PathValidationError;
+  error?: UnifiedError;
 }
 
 /**
@@ -35,23 +37,19 @@ export interface PathValidationResult {
 export function validateAbsolutePath(inputPath: string, operation: string = 'operation'): PathValidationResult {
   // 空パスチェック
   if (!inputPath || inputPath.trim() === '') {
-    const error: PathValidationError = {
-      success: false,
-      failedInfo: {
-        reason: 'path_not_absolute',
-        message: 'パスが空です。絶対パスを指定してください。',
+    const error = createUnifiedError(
+      ErrorCodes.MISSING_PATH,
+      operation,
+      {
         provided_path: inputPath,
-        absolute_path: process.cwd(),
-        solutions: [
-          {
-            method: operation,
-            params: { path: process.cwd() },
-            description: '現在のディレクトリを使用',
-            priority: 'high'
-          }
-        ]
-      }
-    };
+        absolute_path: process.cwd()
+      },
+      'パスが空です。絶対パスを指定してください。',
+      [
+        `絶対パス「${process.cwd()}」を使用`,
+        '有効な絶対パスを指定してください'
+      ]
+    );
     return {
       isValid: false,
       absolutePath: process.cwd(),
@@ -64,29 +62,19 @@ export function validateAbsolutePath(inputPath: string, operation: string = 'ope
   // 絶対パスチェック
   if (!path.isAbsolute(trimmedPath)) {
     const absolutePath = path.resolve(trimmedPath);
-    const error: PathValidationError = {
-      success: false,
-      failedInfo: {
-        reason: 'path_not_absolute',
-        message: `相対パスは受け付けません。絶対パスを使用してください。（BREAKING CHANGE）`,
+    const error = createUnifiedError(
+      ErrorCodes.PATH_NOT_ABSOLUTE,
+      operation,
+      {
         provided_path: trimmedPath,
-        absolute_path: absolutePath,
-        solutions: [
-          {
-            method: operation,
-            params: { path: absolutePath },
-            description: `絶対パス「${absolutePath}」で再実行`,
-            priority: 'high'
-          },
-          {
-            method: 'list_directory',
-            params: { path: process.cwd() },
-            description: '現在のディレクトリから絶対パスを確認',
-            priority: 'medium'
-          }
-        ]
-      }
-    };
+        absolute_path: absolutePath
+      },
+      '相対パスは受け付けません。絶対パスを使用してください。',
+      [
+        `絶対パス「${absolutePath}」で再実行`,
+        '現在のディレクトリから絶対パスを確認'
+      ]
+    );
     
     return {
       isValid: false,
@@ -110,10 +98,10 @@ export function validateAbsolutePath(inputPath: string, operation: string = 'ope
 export function validateMultiplePaths(paths: string[], operation: string = 'operation'): {
   isValid: boolean;
   validatedPaths: string[];
-  errors: PathValidationError[];
+  errors: UnifiedError[];
 } {
   const validatedPaths: string[] = [];
-  const errors: PathValidationError[] = [];
+  const errors: UnifiedError[] = [];
   
   for (const inputPath of paths) {
     const result = validateAbsolutePath(inputPath, operation);
@@ -134,7 +122,29 @@ export function validateMultiplePaths(paths: string[], operation: string = 'oper
 /**
  * パス検証ヘルパー（Express Middleware用）
  */
-export function createPathValidationResponse(inputPath: string, operation: string): PathValidationError | null {
+export function createPathValidationResponse(inputPath: string, operation: string): UnifiedError | null {
   const result = validateAbsolutePath(inputPath, operation);
   return result.error || null;
+}
+
+/**
+ * レガシーエラー形式への変換（後方互換性のため一時的に保持）
+ * @deprecated Will be removed in next major version
+ */
+export function createLegacyPathError(error: UnifiedError): PathValidationError {
+  return {
+    success: false,
+    failedInfo: {
+      reason: 'path_not_absolute',
+      message: error.error.message,
+      provided_path: error.error.details.provided_path || '',
+      absolute_path: error.error.details.absolute_path || process.cwd(),
+      solutions: error.error.suggestions.map(suggestion => ({
+        method: error.error.details.operation,
+        params: { path: error.error.details.absolute_path || process.cwd() },
+        description: suggestion,
+        priority: 'high' as const
+      }))
+    }
+  };
 }

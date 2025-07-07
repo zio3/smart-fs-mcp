@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import type { PrioritizedSolution } from '../../core/types.js';
 
 /**
- * クエリパラメータ型変換ミドルウェア（BREAKING CHANGE: failedInfo形式）
+ * クエリパラメータ型変換ミドルウェア（統一エラー形式）
  */
 export function parseQueryParameters(req: Request, res: Response, next: NextFunction): void | Response {
   try {
@@ -36,29 +35,19 @@ export function parseQueryParameters(req: Request, res: Response, next: NextFunc
     }
     
     if (errors.length > 0) {
-      // BREAKING CHANGE: Convert to failedInfo format
-      const solutions: PrioritizedSolution[] = [
-        {
-          method: 'check_documentation',
-          params: { url: '/api-docs' },
-          description: 'SwaggerUIでパラメータの正しい形式を確認',
-          priority: 'high'
-        },
-        {
-          method: 'api_info',
-          params: { endpoint: '/api' },
-          description: 'API情報でパラメータ仕様を確認',
-          priority: 'medium'
-        }
-      ];
-
+      // Return unified error format
       return res.status(400).json({
         success: false,
-        failedInfo: {
-          reason: 'validation_error',
+        error: {
+          code: 'invalid_parameter',
           message: `パラメータ形式エラー: ${errors.join('; ')}`,
-          solutions,
-          error_code: 'VALIDATION_ERROR'
+          details: {
+            errors: errors
+          },
+          suggestions: [
+            'SwaggerUIでパラメータ仕様を確認してください (/api-docs)',
+            'API情報でパラメータ仕様を確認してください (/api)'
+          ]
         }
       });
     }

@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 📚 Development Guidelines Reference
+
+### メインガイドライン
+- **統合ガイドライン**: https://gist.githubusercontent.com/zio3/20d171adf94bd3311498c5af428da13c/raw/claude-guidelines.md
+Curlをつかって読み込んでください
+
 ## プロジェクト概要
 
 Smart Filesystem MCPは、LLMに最適化されたファイルシステム操作を提供する**シンプルファースト**なModel Context Protocol (MCP)サーバーです。主要な設計原則は、必要な操作数を最小限に抑えることで、ほとんどのタスクは単一の`read_file`コマンドで完了します。
@@ -132,51 +138,87 @@ export async function toolName(params: Params, safety: SafetyController): Promis
 
 ### ツール使用パターン
 
-#### read_file - プライマリツール
+#### read_file - プライマリツール（部分読み込み対応）
 
 ```typescript
-// 成功ケース - コンテンツを直接返す
+// 成功ケース - コンテンツを直接返す（全ファイル）
 {
   "tool": "read_file",
   "arguments": { "path": "./small-file.txt" }
 }
-// レスポンス: { "status": "success", "content": "ファイルの内容..." }
+// レスポンス: { 
+//   "success": true, 
+//   "content": "ファイルの内容...",
+//   "file_info": {
+//     "total_lines": 50,
+//     "returned_lines": 50,
+//     "line_range": { "start": 1, "end": 50 }
+//   }
+// }
 
-// 制限超過 - 詳細情報を返す
+// 部分読み込み - 指定範囲のみ返す
+{
+  "tool": "read_file",
+  "arguments": { "path": "./large-file.log", "start_line": 1000, "end_line": 1500 }
+}
+// レスポンス: { 
+//   "success": true, 
+//   "content": "1000行目から1500行目の内容...",
+//   "file_info": {
+//     "total_lines": 10000,
+//     "returned_lines": 501,
+//     "line_range": { "start": 1000, "end": 1500 }
+//   }
+// }
+
+// 制限超過 - 部分読み込みを提案
 {
   "tool": "read_file", 
   "arguments": { "path": "./large-file.log" }
 }
 // レスポンス: {
-//   "status": "size_exceeded",
-//   "file_info": { size, tokens, type },
-//   "preview": { first_lines, content_summary },
-//   "alternatives": { force_read_available, suggestions }
+//   "success": false,
+//   "error": {
+//     "code": "file_too_large",
+//     "message": "ファイルサイズ（2.0 MB）が制限（20 KB）を超えています",
+//     "details": {
+//       "file_info": {
+//         "total_lines": 10000,
+//         "size_bytes": 2097152,
+//         "estimated_tokens": 524288
+//       },
+//       "alternatives": {
+//         "partial_read_available": true,
+//         "suggestions": [
+//           "Use start_line and end_line parameters to read specific sections",
+//           "Example: start_line=1, end_line=500 (reads first 500 lines)",
+//           "Example: start_line=5000, end_line=5500 (reads middle section)"
+//         ]
+//       }
+//     }
+//   }
 // }
 ```
 
-#### force_read_file - 必要な場合
+
+#### search_content - 強力な検索（改善版）
 
 ```typescript
-// size_exceededを確認後、必要に応じて強制読み取り
-{
-  "tool": "force_read_file",
-  "arguments": { 
-    "path": "./large-file.log",
-    "acknowledge_risk": true
-  }
-}
-```
-
-#### search_content - 強力な検索
-
-```typescript
-// 名前でファイルを検索
+// 名前でファイルを検索（file_pattern単体が正常動作）
 {
   "tool": "search_content",
   "arguments": { 
     "file_pattern": ".*\\.test\\.ts$",
     "directory": "/absolute/path/to/src"
+  }
+}
+
+// 拡張子のみで検索（新機能）
+{
+  "tool": "search_content",
+  "arguments": {
+    "extensions": [".ts", ".js"],
+    "directory": "/absolute/path/to/project"
   }
 }
 
@@ -200,12 +242,61 @@ export async function toolName(params: Params, safety: SafetyController): Promis
     "case_sensitive": true
   }
 }
+
+// ユーザーフレンドリーなデフォルト除外（デフォルト動作）
+{
+  "tool": "search_content",
+  "arguments": {
+    "content_pattern": "export",
+    "directory": "/absolute/path/to/project"
+    // node_modules, .git, dist, build, out, .next, coverage, __tests__, test等を除外
+  }
+}
+
+// 最小限の除外のみ（全ファイル検索に近い）
+{
+  "tool": "search_content",
+  "arguments": {
+    "content_pattern": "export",
+    "directory": "/absolute/path/to/project",
+    "userDefaultExcludeDirs": false
+    // node_modules, .gitのみ除外
+  }
+}
+```
+
+#### get_default_exclude_dirs - 除外ディレクトリ確認
+
+```typescript
+// デフォルト除外ディレクトリの確認
+{
+  "tool": "get_default_exclude_dirs"
+}
+// レスポンス: {
+//   "success": true,
+//   "excludeDirs": ["node_modules", ".git", "dist", ...],
+//   "type": "user_default",
+//   "description": "開発者向けに最適化された除外ディレクトリ一覧"
+// }
+
+// 最小限除外の確認
+{
+  "tool": "get_default_exclude_dirs",
+  "arguments": { "userDefaultExcludeDirs": false }
+}
+// レスポンス: {
+//   "success": true,
+//   "excludeDirs": ["node_modules", ".git"],
+//   "type": "minimal",
+//   "description": "セキュリティ上必要な最小限の除外ディレクトリ"
+// }
 ```
 
 ### 主要な安全制限
 
-- デフォルトファイルサイズ: 20kb (超過した場合はプレビューを返す)
-- 強制読み取り最大: 256kb
+- デフォルトファイルサイズ: 20kb (超過した場合は部分読み込みを提案)
+- 部分読み込み: start_line/end_lineで範囲指定可能（1ベース、両端含む）
+- 行番号は1から開始、指定範囲の両端を含む
 - 検索タイムアウト: 30秒
 - 最大検索結果: 500ファイル
 - 正規表現パターン長: 1000文字
@@ -331,8 +422,15 @@ npm test -- --testNamePattern="unified"
 ### ファイルの読み取り
 
 1. 常に最初に`read_file`を試す
-2. サイズ超過の場合、レスポンスのプレビューを確認
-3. 完全なコンテンツが必要な場合のみ`force_read_file`を使用
+2. サイズ超過の場合、部分読み込みを使用:
+   - `start_line`と`end_line`で範囲指定（1ベース、両端含む）
+   - `search_content`で対象行番号を特定後、部分読み込み
+   - レスポンスには常に`file_info`が含まれ、総行数や返却行数を確認可能
+3. ワークフロー例:
+   - 先頭500行: `{ "path": "/file.txt", "end_line": 500 }`
+   - 特定範囲: `{ "path": "/file.txt", "start_line": 1000, "end_line": 1500 }`
+   - 末尾から: `{ "path": "/file.txt", "start_line": 9500 }` (最後まで読み込み)
+   - 1行だけ: `{ "path": "/file.txt", "start_line": 100, "end_line": 100 }`
 
 ### コードの検索（絶対パス必須）
 

@@ -32,15 +32,21 @@ describe('search-content tool', () => {
   });
 
   test('should call searchByContent and return results', async () => {
-    const mockSearchResults = [
-      { 
-        file_path: 'test.txt', 
-        content_matches: 1, 
-        content_preview: 'hello world', 
-        file_size_bytes: 12, 
-        last_modified: new Date().toISOString() 
-      }
-    ];
+    const mockSearchResults = {
+      matches: [
+        { 
+          file_path: 'test.txt', 
+          content_matches: 1, 
+          content_preview: 'hello world', 
+          file_size_bytes: 12, 
+          last_modified: new Date().toISOString() 
+        }
+      ],
+      filesScanned: 1,
+      binarySkipped: 0,
+      directoriesSkipped: 0,
+      encounteredExcludes: []
+    };
     mockSearchByContent.mockResolvedValue(mockSearchResults);
 
     const result = await searchContent({ 
@@ -56,7 +62,9 @@ describe('search-content tool', () => {
       expect(result.search_stats).toEqual({
         files_scanned: 1,
         files_with_matches: 1,
-        total_matches: 1
+        total_matches: 1,
+        displayed_matches: 1,
+        is_truncated: false
       });
     }
     expect(mockSearchByContent).toHaveBeenCalledWith(
@@ -140,8 +148,8 @@ describe('search-content tool', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.code).toBe('invalid_regex');
-      expect(result.error.message).toContain('No search patterns specified');
+      expect(result.error.code).toBe('invalid_parameter');
+      expect(result.error.message).toContain('検索パラメータが不足しています');
     }
   });
 
@@ -192,11 +200,14 @@ describe('search-content tool', () => {
       expect.objectContaining({
         recursive: true,
         maxDepth: 10,
-        excludeDirs: ['node_modules', '.git', 'dist', 'build', '.next'],
+        excludeDirs: expect.arrayContaining([
+          'node_modules', '.git', 'dist', 'build', 'out', '.next', 
+          'coverage', '__tests__', 'test', '.nyc_output', 'tmp', 'temp'
+        ]),
         caseSensitive: false,
         wholeWord: false,
         maxFiles: 100,
-        maxMatchesPerFile: 10
+        maxMatchesPerFile: 50
       })
     );
   });
@@ -224,8 +235,301 @@ describe('search-content tool', () => {
         wholeWord: true,
         maxDepth: 5,
         maxFiles: 50,
-        maxMatchesPerFile: 3
+        maxMatchesPerFile: 50
       })
     );
+  });
+
+  test('should handle extensions-only search', async () => {
+    const mockSearchResults = [
+      { 
+        file_path: '/test/file.ts', 
+        filename_matches: 1,
+        file_size_bytes: 100
+      },
+      { 
+        file_path: '/test/file2.js', 
+        filename_matches: 1,
+        file_size_bytes: 200
+      }
+    ];
+    mockSearchByFileName.mockResolvedValue(mockSearchResults);
+
+    const result = await searchContent({ 
+      extensions: ['.ts', '.js'],
+      directory: path.resolve('/test')
+    }, mockSafety);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.search_type).toBe('extensions');
+      expect(mockSearchByFileName).toHaveBeenCalledWith(
+        path.resolve('/test'),
+        '.*',
+        expect.objectContaining({
+          extensions: ['.ts', '.js']
+        })
+      );
+    }
+  });
+
+  test('should use user default exclude dirs by default', async () => {
+    mockSearchByContent.mockResolvedValue([]);
+
+    await searchContent({ 
+      content_pattern: 'test',
+      directory: path.resolve('/test')
+    }, mockSafety);
+
+    expect(mockSearchByContent).toHaveBeenCalledWith(
+      path.resolve('/test'),
+      'test',
+      expect.objectContaining({
+        excludeDirs: expect.arrayContaining([
+          'node_modules', '.git', 'dist', 'build', 'out', '.next', 
+          'coverage', '__tests__', 'test', '.nyc_output', 'tmp', 'temp'
+        ])
+      })
+    );
+  });
+
+  test('should use minimal exclude dirs when userDefaultExcludeDirs is false', async () => {
+    mockSearchByContent.mockResolvedValue([]);
+
+    await searchContent({ 
+      content_pattern: 'test',
+      directory: path.resolve('/test'),
+      userDefaultExcludeDirs: false
+    }, mockSafety);
+
+    expect(mockSearchByContent).toHaveBeenCalledWith(
+      path.resolve('/test'),
+      'test',
+      expect.objectContaining({
+        excludeDirs: ['node_modules', '.git']
+      })
+    );
+  });
+
+  test('should prefer explicit exclude_dirs over userDefaultExcludeDirs', async () => {
+    mockSearchByContent.mockResolvedValue([]);
+
+    await searchContent({ 
+      content_pattern: 'test',
+      directory: path.resolve('/test'),
+      exclude_dirs: ['custom_dir'],
+      userDefaultExcludeDirs: false // This should be ignored
+    }, mockSafety);
+
+    expect(mockSearchByContent).toHaveBeenCalledWith(
+      path.resolve('/test'),
+      'test',
+      expect.objectContaining({
+        excludeDirs: ['custom_dir']
+      })
+    );
+  });
+
+  describe('binary file handling', () => {
+    test('should track binary files skipped count', async () => {
+      const mockSearchResults = [
+        { 
+          file_path: 'test.txt', 
+          content_matches: 1, 
+          content_preview: 'hello world', 
+          file_size_bytes: 12, 
+          last_modified: new Date().toISOString() 
+        }
+      ];
+      // バイナリファイルスキップ数を含める
+      (mockSearchResults as any).binarySkipped = 5;
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'hello',
+        directory: path.resolve('/test')
+      }, mockSafety);
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        search_stats: expect.objectContaining({
+          binary_files_skipped: 5
+        })
+      }));
+    });
+
+    test('should not include binary_files_skipped when zero', async () => {
+      const mockSearchResults = [
+        { 
+          file_path: 'test.txt', 
+          content_matches: 1, 
+          content_preview: 'hello world', 
+          file_size_bytes: 12, 
+          last_modified: new Date().toISOString() 
+        }
+      ];
+      // バイナリファイルスキップ数なし
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'hello',
+        directory: path.resolve('/test')
+      }, mockSafety);
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        search_stats: expect.not.objectContaining({
+          binary_files_skipped: expect.any(Number)
+        })
+      }));
+    });
+
+    test('should skip binary extensions in file pattern search', async () => {
+      const mockSearchResults = [
+        { 
+          file_path: '/test/code.js', 
+          filename_matches: 1,
+          file_size_bytes: 100, 
+          last_modified: new Date().toISOString() 
+        }
+      ];
+      // .db, .sqlite files were skipped
+      (mockSearchResults as any).binarySkipped = 3;
+      
+      mockSearchByFileName.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        file_pattern: '.*',
+        directory: path.resolve('/test')
+      }, mockSafety);
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        search_stats: expect.objectContaining({
+          binary_files_skipped: 3
+        })
+      }));
+    });
+  });
+
+  describe('refinement suggestions', () => {
+    test('should not include refinement suggestions when results <= 50', async () => {
+      const mockSearchResults = Array.from({length: 30}, (_, i) => ({ 
+        file_path: `test${i}.txt`, 
+        content_matches: 1, 
+        content_preview: 'hello world', 
+        file_size_bytes: 12, 
+        last_modified: new Date().toISOString() 
+      }));
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'hello',
+        directory: path.resolve('/test')
+      }, mockSafety);
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        search_stats: expect.objectContaining({
+          is_truncated: false,
+          displayed_matches: 30
+        })
+      }));
+      expect(result).not.toHaveProperty('refinement_suggestions');
+    });
+
+    test('should include refinement suggestions when results > 50', async () => {
+      const mockSearchResults = Array.from({length: 100}, (_, i) => ({ 
+        file_path: `test${i}.txt`, 
+        content_matches: 1, 
+        content_preview: 'hello world', 
+        file_size_bytes: 12, 
+        last_modified: new Date().toISOString() 
+      }));
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'hello',
+        directory: path.resolve('/test/project')
+      }, mockSafety);
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        matches: expect.arrayContaining([]),
+        search_stats: expect.objectContaining({
+          files_with_matches: 100,
+          is_truncated: true,
+          displayed_matches: 50
+        }),
+        refinement_suggestions: expect.objectContaining({
+          message: expect.stringContaining('100件中50件を表示'),
+          options: expect.arrayContaining([
+            expect.stringContaining('file_pattern'),
+            expect.stringContaining('extensions')
+          ]),
+          current_filters: expect.objectContaining({
+            directory: path.resolve('/test/project'),
+            content_pattern: 'hello'
+          })
+        })
+      }));
+      
+      // Ensure only 50 matches are returned
+      if (result.success && 'matches' in result) {
+        expect(result.matches).toHaveLength(50);
+      }
+    });
+
+    test('should suggest directory refinement for deep paths', async () => {
+      const mockSearchResults = Array.from({length: 60}, (_, i) => ({ 
+        file_path: `test${i}.txt`, 
+        content_matches: 1, 
+        file_size_bytes: 12, 
+        last_modified: new Date().toISOString() 
+      }));
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'test',
+        directory: path.resolve('/test/deep/path/structure')
+      }, mockSafety);
+
+      if (result.success && 'refinement_suggestions' in result) {
+        expect(result.refinement_suggestions?.options).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining('directory をより具体的に')
+          ])
+        );
+      }
+    });
+
+    test('should suggest pattern refinement when no word boundary used', async () => {
+      const mockSearchResults = Array.from({length: 60}, (_, i) => ({ 
+        file_path: `test${i}.txt`, 
+        content_matches: 1, 
+        file_size_bytes: 12, 
+        last_modified: new Date().toISOString() 
+      }));
+      
+      mockSearchByContent.mockResolvedValue(mockSearchResults);
+
+      const result = await searchContent({ 
+        content_pattern: 'error',
+        directory: path.resolve('/test')
+      }, mockSafety);
+
+      if (result.success && 'refinement_suggestions' in result) {
+        expect(result.refinement_suggestions?.options).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining('\\\\berror\\\\b')
+          ])
+        );
+      }
+    });
   });
 });

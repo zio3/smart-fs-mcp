@@ -9,14 +9,30 @@
 const MAX_PATTERN_LENGTH = 1000;
 
 /**
- * ReDoS（正規表現DoS）攻撃のリスクがあるパターン
+ * 実用的なコード検索パターンの許可リスト
  */
-// const DANGEROUS_PATTERNS = [
-//   /(.*a){x,}\d/,           // 指数的バックトラッキング
-//   /([a-zA-Z]+)*$/,         // ネストした量指定子
-//   /(a+)+$/,                // 重複した量指定子
-//   /(.*){x,}$/,             // 非効率な繰り返し
-// ];
+const SAFE_COMMON_PATTERNS = [
+  'function\\s+\\w+\\s*\\([^)]*\\)\\s*\\{',  // JavaScript/TypeScript関数
+  'class\\s+\\w+\\s*\\{',                    // クラス定義
+  'import\\s+.*\\s+from\\s+["\'].*["\']',    // import文
+  'export\\s+(default\\s+)?\\w+',            // export文
+  'const\\s+\\w+\\s*=',                      // const宣言
+  'let\\s+\\w+\\s*=',                        // let宣言
+  'var\\s+\\w+\\s*=',                        // var宣言
+  'interface\\s+\\w+\\s*\\{',                // TypeScriptインターフェース
+  'type\\s+\\w+\\s*=',                       // TypeScript型定義
+  'async\\s+function\\s+\\w+',               // async関数
+  '\\bawait\\s+\\w+',                        // await式
+];
+
+/**
+ * 代替パターンの提案マップ
+ */
+const PATTERN_SUGGESTIONS: Record<string, string> = {
+  'function\\s+\\w+\\s*\\([^)]*\\)\\s*\\{': 'function\\s+\\w+',
+  'class\\s+\\w+\\s*extends\\s+\\w+\\s*\\{': 'class\\s+\\w+.*extends',
+  'import\\s+\\{[^}]*\\}\\s+from': 'import.*from',
+};
 
 /**
  * 正規表現パターンを検証
@@ -48,11 +64,19 @@ export function validateRegexPattern(pattern: string): { valid: boolean; error?:
     };
   }
 
+  // 許可リストのパターンかチェック
+  if (isInSafePatternList(pattern)) {
+    return { valid: true };
+  }
+
   // ReDoSリスクのあるパターンをチェック
   if (hasReDoSRisk(pattern)) {
+    const suggestion = getSuggestionForPattern(pattern);
     return {
       valid: false,
-      error: 'Pattern may cause performance issues (ReDoS risk detected)'
+      error: suggestion 
+        ? `Pattern may cause performance issues (ReDoS risk detected). Try: ${suggestion}`
+        : 'Pattern may cause performance issues (ReDoS risk detected)'
     };
   }
 
@@ -86,6 +110,32 @@ function hasReDoSRisk(pattern: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * パターンが許可リストに含まれているかチェック
+ */
+function isInSafePatternList(pattern: string): boolean {
+  return SAFE_COMMON_PATTERNS.includes(pattern);
+}
+
+/**
+ * パターンに対する代替案を取得
+ */
+function getSuggestionForPattern(pattern: string): string | undefined {
+  // 直接マッチする提案を探す
+  if (PATTERN_SUGGESTIONS[pattern]) {
+    return PATTERN_SUGGESTIONS[pattern];
+  }
+  
+  // 部分的に似ているパターンの提案を探す
+  for (const [risky, safe] of Object.entries(PATTERN_SUGGESTIONS)) {
+    if (pattern.includes(risky.substring(0, 10))) {
+      return safe;
+    }
+  }
+  
+  return undefined;
 }
 
 /**

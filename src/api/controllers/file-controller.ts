@@ -7,7 +7,6 @@ import { Request, Response } from 'express';
 import { SafetyController } from '../../core/safety-controller.js';
 import { FileAnalyzer } from '../../core/file-analyzer.js';
 import { readFile } from '../../tools/read-file.js';
-import { readFileForce } from '../../tools/read-file-force.js';
 import { writeFile } from '../../tools/write-file.js';
 import { editFile } from '../../tools/edit-file.js';
 import { moveFile } from '../../tools/move-file.js';
@@ -18,7 +17,6 @@ import { asyncHandler } from '../middleware/error-handler.js';
 import { validateAbsolutePath } from '../../utils/path-validator.js';
 import type { 
   ReadFileParams, 
-  ReadFileForceParams, 
   WriteFileParams, 
   EditFileParams, 
   MoveFileParams,
@@ -60,8 +58,10 @@ export const getFileInfo = asyncHandler(async (req: Request, res: Response): Pro
  */
 export const getFileContent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const inputPath = req.query.path as string;
-  const force = req.query.force === 'true';
+  // force parameter removed - no longer supported
   const encoding = req.query.encoding as string;
+  const startLine = req.query.start_line ? parseInt(req.query.start_line as string, 10) : undefined;
+  const endLine = req.query.end_line ? parseInt(req.query.end_line as string, 10) : undefined;
   
   // Absolute path validation (BREAKING CHANGE)
   const pathValidation = validateAbsolutePath(inputPath, 'read_file');
@@ -74,7 +74,9 @@ export const getFileContent = asyncHandler(async (req: Request, res: Response): 
     // Try normal read first (20KB limit)
     const normalParams: ReadFileParams = {
       path: pathValidation.absolutePath,
-      ...(encoding && { encoding: encoding as any })
+      ...(encoding && { encoding: encoding as any }),
+      ...(startLine !== undefined && { start_line: startLine }),
+      ...(endLine !== undefined && { end_line: endLine })
     };
 
     const normalResult = await readFile(normalParams, safety, analyzer);
@@ -85,35 +87,8 @@ export const getFileContent = asyncHandler(async (req: Request, res: Response): 
       return;
     }
 
-    // If size exceeded and force=true, try force read
-    if (!normalResult.success && 'error' in normalResult && normalResult.error.code === 'file_too_large' && force) {
-      const forceParams: ReadFileForceParams = {
-        path: pathValidation.absolutePath,
-        acknowledge_risk: true,
-        ...(encoding && { encoding: encoding as any })
-      };
-
-      const forceResult = await readFileForce(forceParams, safety, analyzer);
-      
-      // Add warning to successful force read
-      if (forceResult.success && 'content' in forceResult) {
-        const fileStats = await import('fs/promises').then(fs => fs.stat(pathValidation.absolutePath));
-        const sizeKB = Math.round(fileStats.size / 1024);
-        
-        res.json({
-          ...forceResult,
-          warning: {
-            message: `中程度ファイル（${sizeKB} KB）を強制読み取りしました`,
-            size_kb: sizeKB,
-            estimated_tokens: Math.round(fileStats.size / 4) // Rough token estimation
-          }
-        });
-        return;
-      }
-      
-      res.json(forceResult);
-      return;
-    }
+    // If size exceeded, always return error regardless of force flag
+    // Force read functionality has been removed for security
 
     // If size exceeded but force=false, return the error as-is (already has suggestions)
     if (!normalResult.success && 'error' in normalResult && normalResult.error.code === 'file_too_large') {

@@ -16,7 +16,7 @@ import {
   estimateTokenCount,
   formatBytes
 } from '../utils/helpers.js';
-import type { FileAnalysis, FileInfo, FileType, FileEncoding } from './types.js';
+import type { FileAnalysis, FileInfo, FileType, FileEncoding, StandardFileInfo } from './types.js';
 
 /**
  * File Analyzer class - provides detailed file analysis
@@ -498,6 +498,62 @@ export class FileAnalyzer {
       return cached.analysis;
     }
     return null;
+  }
+
+  /**
+   * 標準ファイル情報を生成（両API共通）
+   */
+  async generateStandardFileInfo(
+    filePath: string,
+    stats?: Stats
+  ): Promise<StandardFileInfo> {
+    const fileStats = stats || await fs.stat(filePath);
+    const analysis = await this.analyzeFile(filePath);
+    
+    // ファイルタイプの判定
+    let fileType: "text" | "code" | "config" | "binary";
+    if (analysis.isBinary) {
+      fileType = "binary";
+    } else if (analysis.detectedLanguage) {
+      fileType = "code";
+    } else {
+      const ext = path.extname(filePath).toLowerCase();
+      if (['.json', '.yml', '.yaml', '.xml', '.toml', '.ini', '.conf'].includes(ext)) {
+        fileType = "config";
+      } else {
+        fileType = "text";
+      }
+    }
+    
+    // Calculate line count from preview if available
+    let totalLines: number | undefined;
+    if (!analysis.isBinary && analysis.preview) {
+      // If we have a preview, estimate total lines
+      // This is a rough estimate based on file size and average line length
+      if (analysis.preview.lines.length > 0) {
+        const avgLineLength = analysis.preview.lines.reduce((sum, line) => sum + line.length, 0) / analysis.preview.lines.length;
+        totalLines = Math.round(fileStats.size / (avgLineLength || 50));
+      }
+    }
+    
+    return {
+      size_bytes: fileStats.size,
+      total_lines: totalLines,
+      estimated_tokens: analysis.estimatedTokens,
+      is_binary: analysis.isBinary,
+      encoding: analysis.encoding || undefined,
+      file_type: fileType,
+      syntax_language: analysis.detectedLanguage,
+      modified: fileStats.mtime.toISOString(),
+      created: fileStats.birthtime.toISOString(),
+      accessed: fileStats.atime.toISOString(),
+      permissions: {
+        readable: !!(fileStats.mode & 0o444),
+        writable: !!(fileStats.mode & 0o222),
+        executable: !!(fileStats.mode & 0o111),
+        mode: '0' + (fileStats.mode & parseInt('777', 8)).toString(8)
+      }
+    };
   }
 
   /**

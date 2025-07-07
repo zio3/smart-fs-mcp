@@ -4,7 +4,6 @@
  */
 
 import { Request, Response } from 'express';
-import * as path from 'path';
 import { SafetyController } from '../../core/safety-controller.js';
 import { listDirectory } from '../../tools/list-directory.js';
 import { mkdir } from '../../tools/mkdir.js';
@@ -116,28 +115,8 @@ export const createDirectory = asyncHandler(async (req: Request, res: Response):
   if (result.success) {
     res.json({ success: true });
   } else {
-    // Error case - return detailed failure info
-    res.status(400).json({
-      success: false,
-      failedInfo: {
-        reason: 'directory_creation_failed',
-        message: result.error.message || 'Failed to create directory',
-        solutions: [
-          {
-            method: 'mkdir',
-            params: { path: params.path, mode: '0755' },
-            description: 'Retry with default permissions',
-            priority: 'high' as 'high'
-          },
-          {
-            method: 'list_directory',
-            params: { path: path.dirname(params.path) },
-            description: 'Check parent directory status',
-            priority: 'medium' as 'medium'
-          }
-        ]
-      }
-    });
+    // Return failure response directly (already in unified error format)
+    res.status(400).json(result);
   }
 });
 
@@ -233,33 +212,22 @@ export const moveDirectoryLocation = asyncHandler(async (req: Request, res: Resp
       res.json({ success: true });
     }
   } else {
-    // Error case - return detailed failure info
+    // Error case - return unified error format
     res.status(400).json({
       success: false,
-      failedInfo: {
-        reason: 'directory_move_failed',
+      error: {
+        code: 'operation_failed',
         message: result.issue_details?.reason || 'Failed to move directory',
-        source: params.source,
-        destination: params.destination,
-        solutions: [
-          {
-            method: 'move_directory',
-            params: { source: params.source, destination: params.destination, overwrite_existing: true },
-            description: 'Retry with overwrite enabled',
-            priority: 'high' as 'high'
-          },
-          {
-            method: 'list_directory',
-            params: { path: params.source },
-            description: 'Check source directory exists',
-            priority: 'medium' as 'medium'
-          },
-          {
-            method: 'list_directory',
-            params: { path: path.dirname(params.destination) },
-            description: 'Check destination parent directory',
-            priority: 'medium' as 'medium'
-          }
+        details: {
+          operation: 'move_directory',
+          source: params.source,
+          destination: params.destination
+        },
+        suggestions: [
+          'Retry with overwrite_existing: true',
+          'Check if the source directory exists',
+          'Check if the destination path is valid',
+          'Ensure parent directory of destination exists'
         ]
       }
     });

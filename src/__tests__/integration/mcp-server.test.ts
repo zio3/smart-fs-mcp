@@ -132,7 +132,7 @@ describe('MCP Server Integration', () => {
       expect(content.search_type).toBe('content');
     });
 
-    it('should handle errors with failedInfo format', async () => {
+    it('should handle errors with unified error format', async () => {
       const result = await sendRequest('tools/call', {
         name: 'search_content',
         arguments: {

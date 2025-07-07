@@ -22,6 +22,7 @@ import { mkdir } from '../tools/mkdir.js';
 import { deleteFile } from '../tools/delete-file.js';
 import { deleteDirectory } from '../tools/delete-directory.js';
 import { moveDirectory } from '../tools/move-directory.js';
+import { getDefaultExcludeDirs } from '../tools/get-default-exclude-dirs.js';
 import { initializeSecurityController } from '../core/security-controller-v2.js';
 import { formatBytes, formatDuration } from '../utils/helpers.js';
 
@@ -43,6 +44,8 @@ const listDefinitions = [
 const readDefinitions = [
   { name: 'path', defaultOption: true, description: 'File to read' },
   { name: 'encoding', type: String, description: 'Text encoding' },
+  { name: 'start-line', alias: 's', type: Number, description: 'Start line number (1-based, inclusive)' },
+  { name: 'end-line', alias: 'e', type: Number, description: 'End line number (1-based, inclusive)' },
   { name: '__verbose', alias: 'v', type: Boolean, description: 'Verbose output' },
 ];
 
@@ -55,6 +58,8 @@ const searchDefinitions = [
   { name: 'case-sensitive', type: Boolean, description: 'Case sensitive search' },
   { name: 'whole-word', type: Boolean, description: 'Whole word matching' },
   { name: 'max-files', type: Number, description: 'Maximum files to scan' },
+  { name: 'user-default-exclude', type: Boolean, description: 'Use user default exclude dirs (default: true)' },
+  { name: 'no-user-default-exclude', type: Boolean, description: 'Use minimal exclude dirs only' },
   { name: '__verbose', alias: 'v', type: Boolean, description: 'Verbose output' },
 ];
 
@@ -118,6 +123,11 @@ const moveDirDefinitions = [
   { name: '__verbose', alias: 'v', type: Boolean, description: 'Verbose output' },
 ];
 
+const getDefaultExcludeDirsDefinitions = [
+  { name: 'minimal', type: Boolean, description: 'Show minimal exclude directories only' },
+  { name: '__verbose', alias: 'v', type: Boolean, description: 'Verbose output' },
+];
+
 // Initialize services
 const safety = new SafetyController();
 const analyzer = new FileAnalyzer();
@@ -138,7 +148,7 @@ function showHelp() {
       header: 'Commands',
       content: [
         { name: 'list <dir>', summary: 'List directory contents' },
-        { name: 'read <file>', summary: 'Read file content' },
+        { name: 'read <file>', summary: 'Read file content (supports partial read with --start-line and --end-line)' },
         { name: 'search [dir]', summary: 'Search files by pattern or content' },
         { name: 'write <file>', summary: 'Write content to file' },
         { name: 'edit <file>', summary: 'Edit file content' },
@@ -150,6 +160,7 @@ function showHelp() {
         { name: 'delete <file>', summary: 'Delete a file' },
         { name: 'rmdir <dir>', summary: 'Delete a directory' },
         { name: 'movedir <source> <dest>', summary: 'Move a directory' },
+        { name: 'get-default-exclude-dirs', summary: 'Get default exclude directories for search' },
         { name: 'security-test', summary: 'Test security validation' },
         { name: 'help', summary: 'Show this help' },
       ],
@@ -160,6 +171,7 @@ function showHelp() {
         { name: chalk.gray('# List directory'), example: chalk.yellow('npm run cli list ./src') },
         { name: chalk.gray('# Search for TODO comments'), example: chalk.yellow('npm run cli search -c "TODO" ./src') },
         { name: chalk.gray('# Read a file'), example: chalk.yellow('npm run cli read package.json') },
+        { name: chalk.gray('# Read specific lines'), example: chalk.yellow('npm run cli read large.log --start-line 100 --end-line 200') },
         { name: chalk.gray('# Get file info'), example: chalk.yellow('npm run cli file-info README.md') },
       ],
     },
@@ -227,6 +239,9 @@ async function main() {
       case 'movedir':
         await handleMovedir(argv);
         break;
+      case 'get-default-exclude-dirs':
+        await handleGetDefaultExcludeDirs(argv);
+        break;
       case 'security-test':
         await handleSecurityTest(argv);
         break;
@@ -288,16 +303,31 @@ async function handleRead(argv: string[]) {
   }
 
   console.log(chalk.blue('📄 File Read:'), options.path);
+  if (options['start-line'] || options['end-line']) {
+    console.log(chalk.gray('  Line range:'), 
+      options['start-line'] ? `${options['start-line']}` : '1',
+      '-',
+      options['end-line'] ? `${options['end-line']}` : 'end'
+    );
+  }
   console.log('═'.repeat(50));
 
   const params = {
     path: options.path,
+    ...(options['start-line'] && { start_line: options['start-line'] }),
+    ...(options['end-line'] && { end_line: options['end-line'] })
   };
 
   const result = await readFile(params, safety, analyzer);
   
   if (result.success) {
     console.log(result.content);
+    if (result.file_info && options.__verbose) {
+      console.log(chalk.gray('\n--- File Info ---'));
+      console.log(chalk.gray(`Total lines: ${result.file_info.total_lines}`));
+      console.log(chalk.gray(`Returned lines: ${result.file_info.returned_lines}`));
+      console.log(chalk.gray(`Line range: ${result.file_info.line_range.start}-${result.file_info.line_range.end}`));
+    }
   } else {
     displayReadError(result as any, options.__verbose || false);
   }
@@ -309,8 +339,8 @@ async function handleRead(argv: string[]) {
 async function handleSearch(argv: string[]) {
   const options = commandLineArgs(searchDefinitions, { argv });
   
-  if (!options['file-pattern'] && !options['content-pattern']) {
-    console.error(chalk.red('Error: At least one search pattern required (--file-pattern or --content-pattern)'));
+  if (!options['file-pattern'] && !options['content-pattern'] && !options.extensions) {
+    console.error(chalk.red('Error: At least one search criteria required (--file-pattern, --content-pattern, or --extensions)'));
     process.exit(1);
   }
 
@@ -321,6 +351,14 @@ async function handleSearch(argv: string[]) {
   if (options['content-pattern']) console.log('  Content pattern:', options['content-pattern']);
   console.log('═'.repeat(50));
 
+  // Determine userDefaultExcludeDirs setting
+  let userDefaultExcludeDirs = true; // default
+  if (options['no-user-default-exclude']) {
+    userDefaultExcludeDirs = false;
+  } else if (options['user-default-exclude']) {
+    userDefaultExcludeDirs = true;
+  }
+
   const params = {
     ...(options['file-pattern'] && { file_pattern: options['file-pattern'] }),
     ...(options['content-pattern'] && { content_pattern: options['content-pattern'] }),
@@ -329,7 +367,8 @@ async function handleSearch(argv: string[]) {
     ...(options['exclude-dirs'] && { exclude_dirs: options['exclude-dirs'].split(',') }),
     ...(options['case-sensitive'] && { case_sensitive: true }),
     ...(options['whole-word'] && { whole_word: true }),
-    ...(options['max-files'] && { max_files: options['max-files'] })
+    ...(options['max-files'] && { max_files: options['max-files'] }),
+    userDefaultExcludeDirs
   };
 
   const startTime = Date.now();
@@ -359,6 +398,42 @@ async function handleSearch(argv: string[]) {
     console.log(`  Files scanned: ${result.search_stats.files_scanned}`);
     console.log(`  Files with matches: ${result.search_stats.files_with_matches}`);
     console.log(`  Total matches: ${result.search_stats.total_matches}`);
+    if (result.search_stats.binary_files_skipped) {
+      console.log(`  Binary files skipped: ${result.search_stats.binary_files_skipped}`);
+    }
+    if (result.search_stats.directories_skipped) {
+      console.log(`  Directories skipped: ${result.search_stats.directories_skipped}`);
+    }
+  }
+  if ('exclude_info' in result && result.exclude_info) {
+    console.log(chalk.gray(`\n📁 Exclude Info:`));
+    console.log(`  Exclude source: ${result.exclude_info.exclude_source}`);
+    if (result.exclude_info.excluded_dirs_used.length > 0) {
+      console.log(`  Excluded dirs: ${result.exclude_info.excluded_dirs_used.join(', ')}`);
+    }
+    if (result.exclude_info.excluded_dirs_found && result.exclude_info.excluded_dirs_found.length > 0) {
+      console.log(chalk.gray(`\n📂 Encountered excluded directories:`));
+      result.exclude_info.excluded_dirs_found.forEach((dir: any) => {
+        const reasonMap: Record<string, string> = {
+          'user_default': 'ユーザーデフォルト',
+          'performance': 'パフォーマンス',
+          'security': 'セキュリティ',
+          'user_specified': 'ユーザー指定',
+          'minimal_required': '最小限必須'
+        };
+        const reason = reasonMap[dir.reason] || dir.reason;
+        console.log(`  ${dir.path} (${reason})`);
+      });
+    }
+  }
+  
+  // 絞り込み提案を表示
+  if ('refinement_suggestions' in result && result.refinement_suggestions) {
+    console.log(chalk.yellow(`\n🔍 絞り込み提案:`));
+    console.log(chalk.yellow(result.refinement_suggestions.message));
+    result.refinement_suggestions.options.forEach((option, i) => {
+      console.log(chalk.gray(`  ${i + 1}. ${option}`));
+    });
   }
 
   console.log(chalk.gray(`\nCompleted in ${formatDuration(duration)}`));
@@ -628,9 +703,9 @@ async function handleFileInfo(argv: string[]) {
   console.log(chalk.yellow('\n📊 Basic Info:'));
   console.log(`  Exists: ${result.exists}`);
   console.log(`  Type: ${result.type}`);
-  console.log(`  Size: ${formatBytes(result.size)}`);
-  console.log(`  Binary: ${result.is_binary}`);
-  console.log(`  Modified: ${new Date(result.modified).toLocaleString()}`);
+  console.log(`  Size: ${formatBytes(result.file_info.size_bytes)}`);
+  console.log(`  Binary: ${result.file_info.is_binary}`);
+  console.log(`  Modified: ${new Date(result.file_info.modified).toLocaleString()}`);
   
   console.log(chalk.gray(`\nCompleted in ${formatDuration(duration)}`));
 }
@@ -725,12 +800,12 @@ async function handleDelete(argv: string[]) {
   // Display result
   if (!result.success) {
     console.log(chalk.red('\n❌ Failed to delete file:'));
-    console.log(`  Code: ${result.failedInfo.reason}`);
-    console.log(`  Message: ${result.failedInfo.message}`);
-    if (result.failedInfo.solutions && result.failedInfo.solutions.length > 0) {
+    console.log(`  Code: ${result.error.code}`);
+    console.log(`  Message: ${result.error.message}`);
+    if (result.error.suggestions && result.error.suggestions.length > 0) {
       console.log(chalk.yellow('\n💡 Suggestions:'));
-      result.failedInfo.solutions.forEach((sol: any, i: number) => {
-        console.log(`  ${i + 1}. ${sol.description}`);
+      result.error.suggestions.forEach((suggestion: string, i: number) => {
+        console.log(`  ${i + 1}. ${suggestion}`);
       });
     }
   } else {
@@ -769,12 +844,12 @@ async function handleDeleteDir(argv: string[]) {
   // Display result
   if (!result.success) {
     console.log(chalk.red('\n❌ Failed to delete directory:'));
-    console.log(`  Code: ${result.failedInfo.reason}`);
-    console.log(`  Message: ${result.failedInfo.message}`);
-    if (result.failedInfo.solutions && result.failedInfo.solutions.length > 0) {
+    console.log(`  Code: ${result.error.code}`);
+    console.log(`  Message: ${result.error.message}`);
+    if (result.error.suggestions && result.error.suggestions.length > 0) {
       console.log(chalk.yellow('\n💡 Suggestions:'));
-      result.failedInfo.solutions.forEach((sol: any, i: number) => {
-        console.log(`  ${i + 1}. ${sol.description}`);
+      result.error.suggestions.forEach((suggestion: string, i: number) => {
+        console.log(`  ${i + 1}. ${suggestion}`);
       });
     }
   } else if (options['dry-run']) {
@@ -848,6 +923,41 @@ async function handleMovedir(argv: string[]) {
 }
 
 /**
+ * Handle get-default-exclude-dirs command
+ */
+async function handleGetDefaultExcludeDirs(argv: string[]) {
+  const options = commandLineArgs(getDefaultExcludeDirsDefinitions, { argv });
+  
+  console.log(chalk.blue('📁 Default Exclude Directories:'));
+  console.log('═'.repeat(50));
+
+  const params = {
+    userDefaultExcludeDirs: !options.minimal
+  };
+
+  const result = await getDefaultExcludeDirs(params);
+  
+  console.log(chalk.yellow(`\nType: ${result.type}`));
+  console.log(chalk.gray(result.description));
+  console.log(chalk.yellow('\nExcluded directories:'));
+  
+  for (const dir of result.excludeDirs) {
+    console.log(`  - ${dir}`);
+  }
+  
+  if (options.__verbose) {
+    console.log(chalk.gray('\n💡 Usage tips:'));
+    if (result.type === 'user_default') {
+      console.log(chalk.gray('  This is the default for search operations'));
+      console.log(chalk.gray('  Use --no-user-default-exclude for minimal exclusions'));
+    } else {
+      console.log(chalk.gray('  This only excludes essential directories'));
+      console.log(chalk.gray('  Remove --minimal flag for user-friendly defaults'));
+    }
+  }
+}
+
+/**
  * Handle security-test command
  */
 async function handleSecurityTest(argv: string[]) {
@@ -917,12 +1027,15 @@ function displayReadError(result: any, _verbose: boolean) {
   console.log(`  Message: ${result.error.message}`);
   
   // Show file info for size exceeded
-  if (result.error.code === 'file_too_large' && 'file_info' in result && result.file_info) {
+  if (result.error.code === 'file_too_large' && result.error.details && result.error.details.file_info) {
     console.log(chalk.yellow('\n📊 File Info:'));
-    console.log(`  Size: ${formatBytes(result.file_info.size)}`);
-    console.log(`  Type: ${result.file_info.file_type}`);
-    if (result.file_info.estimated_tokens) {
-      console.log(`  Estimated tokens: ${result.file_info.estimated_tokens}`);
+    const fileInfo = result.error.details.file_info;
+    console.log(`  Size: ${formatBytes(fileInfo.size_bytes || 0)}`);
+    if (fileInfo.total_lines) {
+      console.log(`  Total lines: ${fileInfo.total_lines}`);
+    }
+    if (fileInfo.estimated_tokens) {
+      console.log(`  Estimated tokens: ${fileInfo.estimated_tokens}`);
     }
   }
   
@@ -938,35 +1051,40 @@ function displayReadError(result: any, _verbose: boolean) {
   // Show alternatives
   if (result.alternatives) {
     console.log(chalk.yellow('\n💡 Alternatives:'));
-    if (result.alternatives.force_read_available) {
-      console.log('  - Use force_read_file to read anyway');
-    }
     result.alternatives.suggestions.forEach((sug: string) => {
       console.log(`  - ${sug}`);
     });
   }
 }
 
-function displaySearchResults(result: any, verbose: boolean) {
+function displaySearchResults(result: any, _verbose: boolean) {
   if (!result.matches || result.matches.length === 0) {
     return;
   }
 
-  const maxResults = verbose ? result.matches.length : Math.min(10, result.matches.length);
+  // Display all results (already limited to DISPLAY_LIMIT in search-content.ts)
+  const maxResults = result.matches.length;
   
   for (let i = 0; i < maxResults; i++) {
     const match = result.matches[i];
     console.log(chalk.cyan(`\n📄 ${match.file}`));
     console.log(`   Matches: ${match.matchCount} | Size: ${formatBytes(match.fileSize)}`);
     
-    if (match.contents && match.contents.length > 0) {
-      console.log(`   Keywords: ${match.contents.join(', ')}`);
+    if (match.lines && match.lines.length > 0) {
+      // Display all line matches (already limited in search-content.ts)
+      for (const line of match.lines) {
+        if (typeof line === 'string') {
+          // This should not occur anymore with new implementation
+          console.log(chalk.gray(`   ${line}`));
+        } else {
+          // LineMatch object
+          console.log(chalk.gray(`   Line ${line.lineNo}: ${line.content.trim()}`));
+        }
+      }
     }
   }
   
-  if (result.matches.length > maxResults) {
-    console.log(chalk.gray(`\n... and ${result.matches.length - maxResults} more files`));
-  }
+  // No need for "and X more files" message - refinement suggestions handle this
 }
 
 function displayMoveResult(result: any, _verbose: boolean) {

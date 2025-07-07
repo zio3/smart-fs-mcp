@@ -7,10 +7,14 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
 import { DeleteErrorBuilder } from '../core/delete-error-builder.js';
+import { createUnifiedError, ErrorCodes } from '../utils/unified-error-handler.js';
 import type { 
   DeleteDirectoryParams
 } from '../types/delete-operations.js';
-import type { UnifiedDeleteResponse } from '../core/types.js';
+import type { DeleteSuccess } from '../core/types.js';
+import type { UnifiedError } from '../utils/unified-error-handler.js';
+
+export type UnifiedDeleteResponse = DeleteSuccess | UnifiedError;
 
 
 /**
@@ -137,25 +141,17 @@ export async function deleteDirectory(
   try {
     // 絶対パスチェック
     if (!path.isAbsolute(targetPath)) {
-      return {
-        success: false,
-        failedInfo: {
-          reason: 'invalid_target',
-          message: `絶対パス指定が必要です: '${targetPath}' は相対パスです`,
-          target_info: {
-            path: targetPath,
-            type: 'directory',
-            exists: false
-          },
-          solutions: [
-            {
-              method: 'delete_directory',
-              params: { path: path.resolve(targetPath), recursive },
-              description: `絶対パス「${path.resolve(targetPath)}」で再実行`
-            }
-          ]
-        }
-      };
+      return createUnifiedError(
+        ErrorCodes.PATH_NOT_ABSOLUTE,
+        'delete_directory',
+        {
+          path: targetPath,
+          target_type: 'directory',
+          exists: false
+        },
+        `絶対パス指定が必要です: '${targetPath}' は相対パスです`,
+        [`絶対パス「${path.resolve(targetPath)}」で再実行してください`]
+      );
     }
     
     // セキュリティチェック
@@ -189,30 +185,22 @@ export async function deleteDirectory(
       
       // プレビュー結果に基づくレスポンス
       if (!recursive && !preview.isEmpty) {
-        return {
-          success: false,
-          failedInfo: {
-            reason: 'not_empty',
-            message: `ディレクトリが空ではありません（${preview.fileCount}ファイル、${preview.dirCount}ディレクトリ）。dry_runモードで確認しました。`,
-            target_info: {
-              path: targetPath,
-              type: 'directory',
-              exists: true
-            },
-            solutions: [
-              {
-                method: 'delete_directory',
-                params: { path: targetPath, recursive: true, dry_run: false },
-                description: '再帰的削除で実行（全内容を削除）'
-              },
-              {
-                method: 'list_directory',
-                params: { path: targetPath },
-                description: 'ディレクトリ内容を詳細確認'
-              }
-            ]
-          }
-        };
+        return createUnifiedError(
+          ErrorCodes.DIRECTORY_NOT_EMPTY,
+          'delete_directory',
+          {
+            path: targetPath,
+            target_type: 'directory',
+            exists: true,
+            file_count: preview.fileCount,
+            directory_count: preview.dirCount
+          },
+          `ディレクトリが空ではありません（${preview.fileCount}ファイル、${preview.dirCount}ディレクトリ）。dry_runモードで確認しました。`,
+          [
+            '再帰的削除で実行してください（全内容を削除）',
+            'ディレクトリ内容を詳細確認してください'
+          ]
+        );
       }
       
       // dry_run成功（実際の削除は行わない）

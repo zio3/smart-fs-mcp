@@ -18,7 +18,8 @@ export const ErrorCodes = {
   PATH_NOT_ABSOLUTE: 'path_not_absolute',
   CONTENT_TOO_LARGE: 'content_too_large',
   DIRECTORY_NOT_EMPTY: 'directory_not_empty',
-  DESTINATION_EXISTS: 'destination_exists'
+  DESTINATION_EXISTS: 'destination_exists',
+  INVALID_PARAMETER: 'invalid_parameter'
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];
@@ -55,7 +56,8 @@ const ErrorMessages: Record<ErrorCode, string> = {
   [ErrorCodes.PATH_NOT_ABSOLUTE]: '絶対パスを指定してください',
   [ErrorCodes.CONTENT_TOO_LARGE]: '書き込み内容が制限サイズを超えています',
   [ErrorCodes.DIRECTORY_NOT_EMPTY]: 'ディレクトリが空ではありません',
-  [ErrorCodes.DESTINATION_EXISTS]: '宛先ファイルが既に存在します'
+  [ErrorCodes.DESTINATION_EXISTS]: '宛先ファイルが既に存在します',
+  [ErrorCodes.INVALID_PARAMETER]: '不正なパラメータが指定されました'
 };
 
 /**
@@ -108,6 +110,10 @@ const ErrorSuggestions: Record<ErrorCode, string[]> = {
   [ErrorCodes.DESTINATION_EXISTS]: [
     '別の宛先を選択してください',
     '上書きオプションを使用してください'
+  ],
+  [ErrorCodes.INVALID_PARAMETER]: [
+    '正しいパラメータ形式を確認してください',
+    'ドキュメントを参照してください'
   ]
 };
 
@@ -123,12 +129,13 @@ function sanitizeDetails(details: Record<string, any>): Record<string, any> {
     'actual_size', 'max_size', 'pattern_count', 'file_count',
     'directory_count', 'extension', 'encoding', 'provided_path',
     'creation_error', 'source', 'destination', 'directory',
-    'size_kb', 'limit_kb', 'pattern'
+    'size_kb', 'limit_kb', 'pattern', 'alternatives', 'total_lines',
+    'file_info', 'preview'
   ];
   
   // 危険なフィールドのブラックリスト
   const dangerousFields = [
-    'content', 'preview', 'content_preview', 'file_status',
+    'content', 'content_preview', 'file_status',
     'operation_context', 'resolved_path', 'permissions',
     'file_analysis', 'suggested_replacements', 'match_context',
     'internal_error', 'stack', 'trace'
@@ -145,6 +152,14 @@ function sanitizeDetails(details: Record<string, any>): Record<string, any> {
       // 値の型チェック
       if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
         sanitized[key] = value;
+      } else if (typeof value === 'object' && value !== null) {
+        // Handle objects like alternatives, file_info, preview
+        if (key === 'alternatives' || key === 'file_info' || key === 'preview') {
+          sanitized[key] = value;
+        } else {
+          // For other objects, recursively sanitize
+          sanitized[key] = sanitizeDetails(value);
+        }
       }
     }
   }

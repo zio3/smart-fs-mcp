@@ -4,44 +4,77 @@
 
 ### read_file
 
-The primary tool - just read files without ceremony.
+The primary tool - just read files without ceremony. Now supports partial reads with line ranges.
 
 **Parameters:**
 - `path` (required): File path to read
 - `encoding`: Text encoding (default: utf8)
+- `start_line`: Start line number (1-based, inclusive)
+- `end_line`: End line number (1-based, inclusive)
 
 **Response patterns:**
 ```json
-// Success - you get the content
+// Success - full file read
 {
-  "status": "success",
-  "content": "file contents here..."
+  "success": true,
+  "content": "file contents here...",
+  "file_info": {
+    "total_lines": 100,
+    "returned_lines": 100,
+    "line_range": { "start": 1, "end": 100 }
+  }
 }
 
-// Limit exceeded - you get helpful info
+// Success - partial read
 {
-  "status": "size_exceeded",
-  "file_info": { "size_bytes": 2097152, "estimated_tokens": 524288 },
-  "preview": { 
-    "first_lines": ["line 1", "line 2", "..."],
-    "content_summary": "Large log file"
-  },
-  "alternatives": {
-    "force_read_available": true,
-    "suggestions": ["Use read_file_force to read anyway", "..."]
+  "success": true,
+  "content": "lines 50-75 content...",
+  "file_info": {
+    "total_lines": 500,
+    "returned_lines": 26,
+    "line_range": { "start": 50, "end": 75 }
+  }
+}
+
+// Limit exceeded - partial read suggestions
+{
+  "success": false,
+  "error": {
+    "code": "file_too_large",
+    "message": "ファイルサイズ（150 KB）が制限（20 KB）を超えています",
+    "details": {
+      "file_info": {
+        "total_lines": 5000,
+        "size_bytes": 153600,
+        "estimated_tokens": 38400
+      },
+      "alternatives": {
+        "partial_read_available": true,
+        "suggestions": [
+          "Use start_line and end_line parameters to read specific sections",
+          "Example: start_line=1, end_line=500 (reads first 500 lines)",
+          "Example: start_line=2500, end_line=3000 (reads middle section)"
+        ]
+      }
+    }
   }
 }
 ```
 
-### read_file_force
+**Usage examples:**
+```javascript
+// Read entire file
+{ "path": "/path/to/file.txt" }
 
-When you really need that large file.
+// Read lines 100-200
+{ "path": "/path/to/file.txt", "start_line": 100, "end_line": 200 }
 
-**Parameters:**
-- `path` (required): File path to read
-- `acknowledge_risk` (required): Must be true
-- `max_size_mb`: Maximum size to allow (default: 50MB)
-- `encoding`: Text encoding (default: utf8)
+// Read from line 50 to end
+{ "path": "/path/to/file.txt", "start_line": 50 }
+
+// Read first 100 lines
+{ "path": "/path/to/file.txt", "end_line": 100 }
+```
 
 ### list_directory
 
@@ -95,14 +128,18 @@ Powerful grep-like search tool for finding files by name or content using regex 
 **Parameters:**
 - `file_pattern`: Regex pattern to match file names/paths
 - `content_pattern`: Regex pattern to search within file contents
-- `directory`: Starting directory for search (default: current)
+- `extensions`: File extensions to include (e.g., [".js", ".ts"])
+- `directory`: Starting directory for search (required)
 - `recursive`: Search recursively (default: true)
 - `max_depth`: Maximum directory depth (default: 10)
-- `extensions`: File extensions to include (e.g., [".js", ".ts"])
-- `exclude_dirs`: Directories to exclude (default: ["node_modules", ".git"])
+- `exclude_dirs`: Directories to exclude (overrides defaults)
+- `userDefaultExcludeDirs`: Use user-friendly default excludes (default: true)
 - `case_sensitive`: Case-sensitive search (default: false)
 - `whole_word`: Match whole words only (default: false)
 - `max_files`: Maximum results to return (default: 100, max: 500)
+- `max_matches_per_file`: Maximum matches per file (default: 10)
+
+**Note:** At least one of `file_pattern`, `content_pattern`, or `extensions` must be specified.
 
 **Response format:**
 ```json
@@ -283,6 +320,27 @@ Create a directory with automatic parent directory creation.
 - `path` (required): Directory path to create
 - `recursive`: Create parent directories if needed (default: true)
 - `mode`: Unix-style permissions (default: "0755")
+
+### get_default_exclude_dirs
+
+Get the default exclude directories for search operations.
+
+**Parameters:**
+- `userDefaultExcludeDirs`: Use user-friendly defaults (default: true)
+
+**Response format:**
+```json
+{
+  "success": true,
+  "excludeDirs": ["node_modules", ".git", "dist", ...],
+  "type": "user_default",
+  "description": "開発者向けに最適化された除外ディレクトリ一覧"
+}
+```
+
+**Types:**
+- `user_default`: Comprehensive list optimized for development (default)
+- `minimal`: Only essential exclusions (node_modules, .git)
 
 ## REST API Reference
 

@@ -49,7 +49,7 @@ describe('deleteDirectory', () => {
     const result = await deleteDirectory({ path: dirPath });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.failedInfo.reason).toBe('not_empty');
+      expect(result.error.code).toBe('directory_not_empty');
     }
     await expect(fs.access(dirPath)).resolves.not.toThrow();
   });
@@ -59,7 +59,7 @@ describe('deleteDirectory', () => {
     const result = await deleteDirectory({ path: dirPath });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.failedInfo.reason).toBe('not_found');
+      expect(result.error.code).toBe('file_not_found');
     }
   });
 
@@ -79,7 +79,7 @@ describe('deleteDirectory', () => {
     const result = await deleteDirectory({ path: filePath });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.failedInfo.reason).toBe('invalid_target');
+      expect(result.error.code).toBe('invalid_parameter');
     }
   });
 });

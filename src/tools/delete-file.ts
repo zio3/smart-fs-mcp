@@ -7,7 +7,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
 import { DeleteErrorBuilder } from '../core/delete-error-builder.js';
-import type { DeleteFileParams, UnifiedDeleteResponse } from '../core/types.js';
+import { createUnifiedError, ErrorCodes } from '../utils/unified-error-handler.js';
+import type { DeleteFileParams, DeleteSuccess } from '../core/types.js';
+import type { UnifiedError } from '../utils/unified-error-handler.js';
+
+export type UnifiedDeleteResponse = DeleteSuccess | UnifiedError;
 
 /**
  * ファイルを削除する（簡素化版）
@@ -21,25 +25,17 @@ export async function deleteFile(params: DeleteFileParams): Promise<UnifiedDelet
   try {
     // 絶対パスチェック
     if (!path.isAbsolute(targetPath)) {
-      return {
-        success: false,
-        failedInfo: {
-          reason: 'invalid_target',
-          message: `絶対パス指定が必要です: '${targetPath}' は相対パスです`,
-          target_info: {
-            path: targetPath,
-            type: 'file',
-            exists: false
-          },
-          solutions: [
-            {
-              method: 'delete_file',
-              params: { path: path.resolve(targetPath) },
-              description: `絶対パス「${path.resolve(targetPath)}」で再実行`
-            }
-          ]
-        }
-      };
+      return createUnifiedError(
+        ErrorCodes.PATH_NOT_ABSOLUTE,
+        'delete_file',
+        {
+          path: targetPath,
+          target_type: 'file',
+          exists: false
+        },
+        `絶対パス指定が必要です: '${targetPath}' は相対パスです`,
+        [`絶対パス「${path.resolve(targetPath)}」で再実行してください`]
+      );
     }
     
     // セキュリティチェック
@@ -125,7 +121,7 @@ export async function deleteFileOrThrow(params: DeleteFileParams): Promise<Unifi
   const result = await deleteFile(params);
   
   if (!result.success) {
-    const errorMessage = result.failedInfo?.message || 'Failed to delete file';
+    const errorMessage = result.error?.message || 'Failed to delete file';
     throw new Error(errorMessage);
   }
   

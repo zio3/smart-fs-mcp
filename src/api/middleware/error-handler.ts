@@ -8,6 +8,7 @@ import type { PrioritizedSolution } from '../../core/types.js';
 
 /**
  * Unified error response format (matching MCP tools)
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface UnifiedErrorResponse {
   success: false;
@@ -68,12 +69,28 @@ function mapErrorToReason(error: unknown): string {
   
   if (err.code === 'ENOENT') return 'not_found';
   if (err.code === 'EACCES' || err.code === 'EPERM') return 'permission_denied';
-  if (err.code === 'VALIDATION_ERROR') return 'validation_error';
+  if (err.code === 'VALIDATION_ERROR' || err.name === 'ValidationError') return 'validation_error';
   if (err.code === 'SIZE_EXCEEDED') return 'size_exceeded';
   if (err.code === 'BINARY_FILE_DETECTED') return 'binary_file';
   if (err.name === 'SecurityError') return 'permission_denied';
   
   return 'unknown_error';
+}
+
+/**
+ * Map legacy error reasons to unified error codes
+ */
+function mapErrorCodeToUnified(reason: string): string {
+  const reasonMap: Record<string, string> = {
+    'not_found': 'file_not_found',
+    'permission_denied': 'access_denied',
+    'validation_error': 'invalid_parameter',
+    'size_exceeded': 'file_too_large',
+    'binary_file': 'invalid_file_type',
+    'unknown_error': 'operation_failed'
+  };
+  
+  return reasonMap[reason] || 'operation_failed';
 }
 
 /**
@@ -247,19 +264,18 @@ export function errorHandler(
 
   // Determine HTTP status code
   let statusCode = 500;
-  let errorCode: string | undefined;
   
   if (typeof error === 'object' && error !== null) {
     const err = error as Record<string, any>;
     if (err.code && ERROR_STATUS_MAP[err.code]) {
       statusCode = ERROR_STATUS_MAP[err.code] || 500;
-      errorCode = err.code;
     } else if (err.name && ERROR_STATUS_MAP[err.name]) {
       statusCode = ERROR_STATUS_MAP[err.name] || 500;
-      errorCode = err.name;
     } else if (err.status) {
       statusCode = err.status;
-      errorCode = `HTTP_${statusCode}`;
+    } else if (err.name === 'ValidationError') {
+      // Handle ValidationError from validator middleware
+      statusCode = 400;
     }
   }
 
@@ -277,22 +293,19 @@ export function errorHandler(
   // Generate LLM-optimized solutions
   const solutions = generateErrorSolutions(error, req);
 
-  // Create unified error response (BREAKING CHANGE)
-  const errorResponse: UnifiedErrorResponse = {
+  // Create unified error response (統一エラー形式に移行)
+  const errorResponse = {
     success: false,
-    failedInfo: {
-      reason,
+    error: {
+      code: mapErrorCodeToUnified(reason),
       message,
-      solutions,
-      ...(errorCode && { error_code: errorCode }),
-      ...(process.env.NODE_ENV === 'development' && {
-        details: {
-          stack: (error instanceof Error) ? error.stack : undefined,
-          originalError: String(error),
-          requestId,
-          timestamp
-        }
-      })
+      details: {
+        operation: req.path,
+        method: req.method,
+        ...(req.query.path && { path: req.query.path }),
+        ...(req.body?.path && { path: req.body.path })
+      },
+      suggestions: solutions.map(s => s.description)
     }
   };
 
@@ -313,6 +326,7 @@ export function asyncHandler(
 
 /**
  * Create a standardized error response (for manual error creation)
+ * @deprecated Use createUnifiedError from unified-error-handler instead
  */
 export function createUnifiedErrorResponse(
   reason: string,

@@ -35,7 +35,7 @@ describe('deleteFile', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.failedInfo.reason).toBe('not_found');
+      expect(result.error.code).toBe('file_not_found');
     }
   });
 
@@ -57,7 +57,7 @@ describe('deleteFile', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.failedInfo.reason).toBe('permission_denied');
+      expect(result.error.code).toBe('access_denied');
     }
 
     securityController.validateSecurePath = originalValidateSecurePath; // Restore mock

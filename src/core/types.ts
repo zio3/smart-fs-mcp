@@ -316,6 +316,66 @@ export interface ReadFileParams {
   
   /** Force specific encoding */
   encoding?: FileEncoding;
+  
+  /** Start line number (1-based, inclusive) */
+  start_line?: number;
+  
+  /** End line number (1-based, inclusive) */
+  end_line?: number;
+}
+
+/**
+ * Line range information
+ */
+export interface LineRangeInfo {
+  /** Starting line number */
+  start: number;
+  
+  /** Ending line number */
+  end: number;
+}
+
+/**
+ * File information for partial reads
+ */
+/**
+ * 標準ファイル情報構造（両API共通）
+ */
+export interface StandardFileInfo {
+  // 基本情報
+  size_bytes: number;
+  total_lines?: number;           // テキストファイルのみ
+  estimated_tokens?: number;      // テキストファイルのみ
+  
+  // ファイル属性
+  is_binary: boolean;
+  encoding?: string;              // "utf8", "ascii", etc.
+  file_type: "text" | "code" | "config" | "binary";
+  syntax_language?: string;       // "typescript", "markdown", etc.
+  
+  // タイムスタンプ
+  modified: string;
+  created?: string;
+  accessed?: string;
+  
+  // 権限情報
+  permissions?: {
+    readable: boolean;
+    writable: boolean;
+    executable: boolean;
+    mode?: string;               // Unix形式 "0644"
+  };
+}
+
+export interface PartialReadFileInfo {
+  /** Total lines in the file */
+  total_lines: number;
+  
+  /** Number of lines returned */
+  returned_lines: number;
+  
+  /** Line range that was read */
+  line_range: LineRangeInfo;
 }
 
 /**
@@ -324,6 +384,9 @@ export interface ReadFileParams {
 export interface ReadFileSuccess {
   status: 'success';
   content: string;
+  
+  /** File information (included when line ranges are used) */
+  file_info?: PartialReadFileInfo;
 }
 
 /**
@@ -338,6 +401,7 @@ export interface ReadFileLimited {
     estimated_tokens: number;
     type: 'text' | 'code' | 'binary' | 'data' | 'config';
     safe_to_read: boolean;
+    total_lines?: number;
   };
   
   /** Content preview */
@@ -358,8 +422,8 @@ export interface ReadFileLimited {
   
   /** Alternative options */
   alternatives: {
-    force_read_available: boolean;
     suggestions: string[];
+    partial_read_available?: boolean;
   };
 }
 
@@ -368,22 +432,6 @@ export interface ReadFileLimited {
  */
 export type ReadFileResult = ReadFileSuccess | ReadFileLimited;
 
-/**
- * Tool parameters for read_file_force
- */
-export interface ReadFileForceParams {
-  /** File path to read */
-  path: string;
-  
-  /** Maximum size in MB to allow */
-  max_size_mb?: number;
-  
-  /** Acknowledge risk */
-  acknowledge_risk: boolean;
-  
-  /** Force specific encoding */
-  encoding?: FileEncoding;
-}
 
 /**
  * Tool parameters for scan_directory
@@ -595,6 +643,9 @@ export interface SearchContentParams {
   
   /** Maximum matches per file */
   max_matches_per_file?: number;
+  
+  /** Use user-friendly default exclude directories (default: true) */
+  userDefaultExcludeDirs?: boolean;
 }
 
 
@@ -868,6 +919,9 @@ export interface Solution {
 export interface SimpleReadFileSuccess {
   success: true;
   content: string;
+  
+  /** File information (always included, extends StandardFileInfo with reading info) */
+  file_info: StandardFileInfo & PartialReadFileInfo;
 }
 
 
@@ -882,6 +936,17 @@ export type SimpleReadFileResponse = SimpleReadFileSuccess | import('../utils/un
  */
 
 /**
+ * Line match information
+ */
+export interface LineMatch {
+  /** Matched line content */
+  content: string;
+  
+  /** Line number (1-based) */
+  lineNo: number;
+}
+
+/**
  * Search match information
  */
 export interface SearchMatch {
@@ -894,8 +959,34 @@ export interface SearchMatch {
   /** File size in bytes */
   fileSize: number;
   
-  /** Extracted content keywords (deduplicated) */
-  contents: string[];
+  /** Matched lines with line numbers (limited to 50) */
+  lines?: (LineMatch | string)[];
+}
+
+/**
+ * Refinement suggestion for search results
+ */
+export interface RefinementSuggestion {
+  message: string;
+  options: string[];
+  current_filters: {
+    directory: string;
+    file_pattern?: string;
+    content_pattern?: string;
+    extensions?: string[];
+  };
+}
+
+/**
+ * Excluded directory information
+ */
+export interface ExcludedDirectoryInfo {
+  /** Relative path to the excluded directory */
+  path: string;
+  /** Reason for exclusion */
+  reason: 'user_default' | 'performance' | 'security' | 'user_specified' | 'minimal_required';
+  /** Optional context information */
+  note?: string;
 }
 
 /**
@@ -909,11 +1000,23 @@ export interface SearchContentSuccess {
     files_scanned: number;
     files_with_matches: number;
     total_matches: number;
+    displayed_matches?: number;  // 新規追加
+    is_truncated?: boolean;      // 新規追加
+    binary_files_skipped?: number;
+    directories_skipped?: number;  // 新規追加
   };
+  exclude_info?: {
+    excluded_dirs_used: string[];
+    excluded_dirs_found: ExcludedDirectoryInfo[];  // 型を変更
+    exclude_source: 'user_default' | 'minimal' | 'custom';
+  };
+  warnings?: string[];
+  refinement_suggestions?: RefinementSuggestion;  // 新規追加
 }
 
 /**
  * Failed search response
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface SearchContentFailure {
   success: false;
@@ -927,7 +1030,7 @@ export interface SearchContentFailure {
 /**
  * Simple search content response type
  */
-export type SimpleSearchContentResponse = SearchContentSuccess | SearchContentFailure;
+export type SimpleSearchContentResponse = SearchContentSuccess | import('../utils/unified-error-handler.js').UnifiedError;
 
 /**
  * Enhanced Directory List API Types (LLM-Optimized)
@@ -1035,6 +1138,7 @@ export interface LLMDirectorySuccess {
 
 /**
  * LLM-optimized directory response (failure)
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface LLMDirectoryFailure {
   success: false;
@@ -1062,7 +1166,7 @@ export interface LLMDirectoryFailure {
 /**
  * LLM-optimized directory response type
  */
-export type LLMOptimizedDirectoryResponse = LLMDirectorySuccess | LLMDirectoryFailure;
+export type LLMOptimizedDirectoryResponse = LLMDirectorySuccess | import('../utils/unified-error-handler.js').UnifiedError;
 
 /**
  * Unified File Operations LLM Optimization Types
@@ -1176,6 +1280,7 @@ export interface OperationPreview {
 
 /**
  * Unified LLM-optimized file operation response
+ * @deprecated Use specific success types with UnifiedError for failures
  */
 export interface LLMOptimizedFileOperationResponse {
   /** Operation success status */
@@ -1292,6 +1397,7 @@ export interface WriteFileSuccess {
 
 /**
  * WriteFile failure response with actionable solutions
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface WriteFileFailure {
   success: false;
@@ -1334,7 +1440,7 @@ export interface WriteFileFailure {
 /**
  * WriteFile unified response type
  */
-export type WriteFileUnifiedResponse = WriteFileSuccess | WriteFileFailure;
+export type WriteFileUnifiedResponse = WriteFileSuccess | import('../utils/unified-error-handler.js').UnifiedError;
 
 /**
  * Directory Delete API LLM-Optimized Types
@@ -1361,6 +1467,7 @@ export interface DirectoryDeleteSuccess {
 
 /**
  * Directory Delete failure response with actionable solutions
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface DirectoryDeleteFailure {
   success: false;
@@ -1397,7 +1504,7 @@ export interface DirectoryDeleteFailure {
 /**
  * Directory Delete unified response type
  */
-export type DirectoryDeleteUnifiedResponse = DirectoryDeleteSuccess | DirectoryDeleteFailure;
+export type DirectoryDeleteUnifiedResponse = DirectoryDeleteSuccess | import('../utils/unified-error-handler.js').UnifiedError;
 
 /**
  * Unified Delete API Types (Simplified)
@@ -1438,6 +1545,7 @@ export interface DeleteTargetInfo {
 
 /**
  * Delete failure response with actionable solutions
+ * @deprecated Use UnifiedError from unified-error-handler instead
  */
 export interface DeleteFailure {
   success: false;
@@ -1459,7 +1567,7 @@ export interface DeleteFailure {
 /**
  * Unified delete response type
  */
-export type UnifiedDeleteResponse = DeleteSuccess | DeleteFailure;
+export type UnifiedDeleteResponse = DeleteSuccess | import('../utils/unified-error-handler.js').UnifiedError;
 
 /**
  * Subset of fs/promises for dependency injection

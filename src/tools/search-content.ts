@@ -4,6 +4,7 @@
  */
 
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import { SafetyController } from '../core/safety-controller.js';
 import { validateRegexPattern } from '../utils/regex-validator.js';
 // import { formatBytes } from '../utils/helpers.js';
@@ -17,9 +18,12 @@ import type { SearchEngineOptions } from '../core/search-engine.js';
 import type { 
   SearchContentParams,
   SearchContentSuccess,
-  SearchMatch
+  SearchMatch,
+  LineMatch,
+  RefinementSuggestion
 } from '../core/types.js';
 import { createUnifiedError, createUnifiedErrorFromException, ErrorCodes, UnifiedError, validatePath } from '../utils/unified-error-handler.js';
+import { getDefaultExcludeDirs } from '../core/exclude-dirs.js';
 
 /**
  * 検索制限値
@@ -33,6 +37,11 @@ const SEARCH_LIMITS = {
   MAX_RESULTS: 500
 };
 
+/**
+ * 表示制限とオプション
+ */
+const DISPLAY_LIMIT = 50;
+const ENABLE_REFINEMENT_SUGGESTIONS = true;
 
 /**
  * ファイル検索メインツール - Simple format (default)
@@ -75,9 +84,18 @@ export async function searchContent(
     const validationError = validateParams(params);
     if (validationError) {
       return createUnifiedError(
-        ErrorCodes.INVALID_REGEX,
+        ErrorCodes.INVALID_PARAMETER,
         'search_content',
-        {},
+        {
+          valid_combinations: [
+            'file_pattern のみ',
+            'content_pattern のみ', 
+            'extensions のみ',
+            'file_pattern + content_pattern',
+            'file_pattern + extensions',
+            'content_pattern + extensions'
+          ]
+        },
         validationError
       );
     }
@@ -87,9 +105,17 @@ export async function searchContent(
     const recursive = params.recursive ?? true;
     const maxDepth = params.max_depth ?? 10;
     const maxFiles = Math.min(params.max_files ?? 100, SEARCH_LIMITS.MAX_RESULTS);
-    const excludeDirs = Array.isArray(params.exclude_dirs) 
-      ? params.exclude_dirs 
-      : ['node_modules', '.git', 'dist', 'build', '.next'];
+    
+    // 除外ディレクトリの決定
+    let excludeDirs: readonly string[];
+    if (params.exclude_dirs) {
+      // 明示的な指定がある場合は優先
+      excludeDirs = params.exclude_dirs;
+    } else {
+      // デフォルト除外を使用
+      const defaultExclude = getDefaultExcludeDirs(params.userDefaultExcludeDirs ?? true);
+      excludeDirs = defaultExclude.dirs;
+    }
     
     // ディレクトリアクセスチェック
     const accessCheck = await safety.validateDirectoryAccess(directory);
@@ -103,22 +129,23 @@ export async function searchContent(
     }
     
     // 検索実行
-    const searchType = determineSearchType(params.file_pattern, params.content_pattern);
+    const searchType = determineSearchType(params.file_pattern, params.content_pattern, params.extensions);
     const searchOptions: SearchEngineOptions = {
       recursive,
       maxDepth,
       extensions: params.extensions,
       excludeExtensions: params.exclude_extensions,
-      excludeDirs,
+      excludeDirs: [...excludeDirs], // Convert readonly array to mutable array
       caseSensitive: params.case_sensitive ?? false,
       wholeWord: params.whole_word ?? false,
       maxFiles,
-      maxMatchesPerFile: params.max_matches_per_file ?? 10
+      maxMatchesPerFile: DISPLAY_LIMIT,  // 固定値を使用
+      // Note: Binary file filtering is handled in search-engine.ts
     };
     
-    let results: any[];
+    let searchResult: any;
     try {
-      results = await executeSearch(
+      searchResult = await executeSearch(
         directory,
         params.file_pattern,
         params.content_pattern,
@@ -128,6 +155,13 @@ export async function searchContent(
     } catch (searchError) {
       return createUnifiedErrorFromException(searchError, 'search_content', directory);
     }
+    
+    // Extract results from new format
+    const results = searchResult.matches || [];
+    const filesScanned = searchResult.filesScanned || 0;
+    const binarySkipped = searchResult.binarySkipped || 0;
+    const directoriesSkipped = searchResult.directoriesSkipped || 0;
+    const encounteredExcludes = searchResult.encounteredExcludes || [];
     
     // No matches found
     if (results.length === 0) {
@@ -142,16 +176,73 @@ export async function searchContent(
     // Convert to simple matches
     const matches = await convertToSimpleMatches(results);
     
-    return {
+    // Determine exclude source
+    let excludeSource: 'user_default' | 'minimal' | 'custom';
+    if (params.exclude_dirs) {
+      excludeSource = 'custom';
+    } else if (params.userDefaultExcludeDirs ?? true) {
+      excludeSource = 'user_default';
+    } else {
+      excludeSource = 'minimal';
+    }
+
+    // 総マッチ数を計算
+    const totalMatches = matches.reduce((sum, m) => sum + m.matchCount, 0);
+    
+    // 表示されるマッチ数（最大DISPLAY_LIMIT件）
+    const displayedMatches = Math.min(matches.length, DISPLAY_LIMIT);
+    const truncatedMatches = matches.slice(0, DISPLAY_LIMIT);
+    
+    const searchStats: any = {
+      files_scanned: filesScanned,
+      files_with_matches: matches.length,
+      total_matches: totalMatches,
+      displayed_matches: displayedMatches,
+      is_truncated: matches.length > DISPLAY_LIMIT
+    };
+    
+    // バイナリファイルスキップ数を含める
+    if (binarySkipped > 0) {
+      searchStats.binary_files_skipped = binarySkipped;
+    }
+    
+    // ディレクトリスキップ数を含める
+    if (directoriesSkipped > 0) {
+      searchStats.directories_skipped = directoriesSkipped;
+    }
+    
+    // 警告メッセージの収集
+    const warnings: string[] = [];
+    if (params.extensions && params.extensions.length === 0) {
+      warnings.push('空の拡張子配列: 拡張子なしファイルのみ検索します');
+    }
+
+    const result: SearchContentSuccess = {
       success: true,
-      matches,
+      matches: truncatedMatches,  // DISPLAY_LIMIT件に制限
       search_type: searchType,
-      search_stats: {
-        files_scanned: results.length,
-        files_with_matches: matches.length,
-        total_matches: matches.reduce((sum, m) => sum + m.matchCount, 0)
+      search_stats: searchStats,
+      exclude_info: {
+        excluded_dirs_used: [...excludeDirs],
+        excluded_dirs_found: encounteredExcludes,
+        exclude_source: excludeSource
       }
     };
+    
+    // 警告がある場合のみ追加
+    if (warnings.length > 0) {
+      result.warnings = warnings;
+    }
+    
+    // 絞り込み提案を追加
+    if (ENABLE_REFINEMENT_SUGGESTIONS) {
+      const refinementSuggestions = generateRefinementSuggestions(matches.length, params);
+      if (refinementSuggestions) {
+        result.refinement_suggestions = refinementSuggestions;
+      }
+    }
+    
+    return result;
     
   } catch (error) {
     return createUnifiedErrorFromException(error, 'search_content', params.directory);
@@ -162,9 +253,9 @@ export async function searchContent(
  * パラメータ検証
  */
 function validateParams(params: SearchContentParams): string | null {
-  // 必須チェック
-  if (!params.file_pattern && !params.content_pattern) {
-    return 'No search patterns specified';
+  // 必須チェック - file_pattern、content_pattern、extensionsのいずれかが必要
+  if (!params.file_pattern && !params.content_pattern && !params.extensions) {
+    return '検索パラメータが不足しています。file_pattern、content_pattern、またはextensionsのいずれかを指定してください';
   }
   
   // 正規表現検証
@@ -188,10 +279,11 @@ function validateParams(params: SearchContentParams): string | null {
 /**
  * 検索タイプの判定
  */
-function determineSearchType(filePattern?: string, contentPattern?: string): string {
+function determineSearchType(filePattern?: string, contentPattern?: string, extensions?: string[]): string {
   if (filePattern && contentPattern) return 'both';
   if (filePattern) return 'filename';
   if (contentPattern) return 'content';
+  if (extensions && extensions.length > 0) return 'extensions';
   return 'unknown';
 }
 
@@ -204,7 +296,7 @@ async function executeSearch(
   contentPattern: string | undefined,
   searchType: string,
   options: any
-): Promise<any[]> {
+): Promise<any> {
   switch (searchType) {
     case 'filename':
       return searchByFileName(directory, filePattern!, options);
@@ -212,14 +304,13 @@ async function executeSearch(
       return searchByContent(directory, contentPattern!, options);
     case 'both':
       return searchBoth(directory, filePattern || null, contentPattern || null, options);
+    case 'extensions':
+      // extensionsのみの場合は、全ファイル名を対象に検索（ワイルドカードパターン）
+      return searchByFileName(directory, '.*', options);
     default:
-      return [];
+      return { matches: [], filesScanned: 0, binarySkipped: 0, directoriesSkipped: 0, encounteredExcludes: [] };
   }
 }
-
-
-import * as fs from 'fs/promises';
-
 
 /**
  * Convert search results to simple matches
@@ -239,117 +330,94 @@ async function convertToSimpleMatches(results: any[]): Promise<SearchMatch[]> {
       }
     }
     
-    // Extract content keywords
-    const contents = extractContentKeywords(result);
-    
     // Calculate match count
     const matchCount = (result.filename_matches || 0) + (result.content_matches || 0);
     
-    matches.push({
+    // Basic match info
+    const match: SearchMatch = {
       file: result.file_path,
       matchCount,
-      fileSize,
-      contents
-    });
+      fileSize
+    };
+    
+    // Always add detailed lines info if available
+    if (result.lineMatches) {
+      match.lines = formatLineMatches(result.lineMatches);
+    }
+    
+    matches.push(match);
   }
   
   return matches;
 }
 
 /**
- * Extract keywords from search results with deduplication
+ * Format line matches with limit
  */
-function extractContentKeywords(result: any): string[] {
-  const keywords = new Set<string>();
+function formatLineMatches(lineMatches: Array<{ content: string; lineNo: number }>): (LineMatch | string)[] {
+  const maxLines = DISPLAY_LIMIT;
+  const lines: (LineMatch | string)[] = [];
   
-  // Priority 1: Use matchedStrings if available (これが正確なマッチ文字列)
-  if (result.matchedStrings && Array.isArray(result.matchedStrings)) {
-    // matchedStringsから重複を除去して返す
-    for (const matchStr of result.matchedStrings) {
-      if (matchStr && typeof matchStr === 'string') {
-        keywords.add(matchStr);
-      }
-    }
-    return Array.from(keywords);
-  }
-  
-  // Fallback: Extract from match context if matchedStrings not available
-  const maxKeywords = 5;
-  let totalFound = 0;
-  
-  if (result.match_context && Array.isArray(result.match_context)) {
-    for (const context of result.match_context) {
-      // Extract function names
-      const funcMatches = context.match(/(?:function|const|let|var)\s+(\w+)/g);
-      if (funcMatches) {
-        for (const match of funcMatches) {
-          const name = match.replace(/(?:function|const|let|var)\s+/, '');
-          if (!keywords.has(name)) {
-            totalFound++;
-            if (keywords.size < maxKeywords) {
-              keywords.add(name);
-            }
-          }
-        }
-      }
-      
-      // Extract class names
-      const classMatches = context.match(/(?:class|interface)\s+(\w+)/g);
-      if (classMatches) {
-        for (const match of classMatches) {
-          const name = match.replace(/(?:class|interface)\s+/, '');
-          if (!keywords.has(name)) {
-            totalFound++;
-            if (keywords.size < maxKeywords) {
-              keywords.add(name);
-            }
-          }
-        }
-      }
-      
-      // Extract export names
-      const exportMatches = context.match(/export\s+(?:default\s+)?(?:function|class|const|let|var)?\s*(\w+)/g);
-      if (exportMatches) {
-        for (const match of exportMatches) {
-          const parts = match.split(/\s+/);
-          const name = parts[parts.length - 1];
-          if (name && /^\w+$/.test(name) && !keywords.has(name)) {
-            totalFound++;
-            if (keywords.size < maxKeywords) {
-              keywords.add(name);
-            }
-          }
-        }
-      }
+  // Add up to DISPLAY_LIMIT lines
+  for (let i = 0; i < Math.min(lineMatches.length, maxLines); i++) {
+    const match = lineMatches[i];
+    if (match) {
+      lines.push(match);
     }
   }
   
-  // Extract from content preview if no keywords found
-  if (keywords.size === 0 && result.content_preview) {
-    const preview = result.content_preview;
-    
-    // Simple identifier extraction
-    const identifiers = preview.match(/\b[A-Z][a-zA-Z0-9]*\b/g);
-    if (identifiers) {
-      for (const id of identifiers) {
-        if (!keywords.has(id)) {
-          totalFound++;
-          if (keywords.size < maxKeywords) {
-            keywords.add(id);
-          }
-        }
-      }
+  // No "+N more" - just truncate at DISPLAY_LIMIT
+  
+  return lines;
+}
+
+/**
+ * 絞り込み提案を生成
+ */
+function generateRefinementSuggestions(
+  totalMatches: number,
+  currentParams: SearchContentParams
+): RefinementSuggestion | undefined {
+  
+  if (totalMatches <= DISPLAY_LIMIT) {
+    return undefined;
+  }
+
+  const suggestions: string[] = [];
+  
+  // ファイルパターン提案
+  if (!currentParams.file_pattern) {
+    suggestions.push("file_pattern を追加 (例: '*.ts' でTypeScriptファイルのみ)");
+  }
+  
+  // 拡張子提案  
+  if (!currentParams.extensions || currentParams.extensions.length === 0) {
+    suggestions.push("extensions を指定 (例: ['.ts', '.js'] で特定ファイル型のみ)");
+  }
+  
+  // ディレクトリ絞り込み提案
+  if (currentParams.directory && currentParams.directory.includes('/')) {
+    const parts = currentParams.directory.split('/');
+    if (parts.length > 2) {
+      suggestions.push("directory をより具体的に (例: '" + currentParams.directory + "/src' でsrcディレクトリのみ)");
     }
   }
   
-  const keywordArray = Array.from(keywords);
-  
-  // Add "+N more" if there are more keywords than the limit
-  if (totalFound > maxKeywords) {
-    keywordArray.push(`+${totalFound - maxKeywords} more`);
+  // パターン具体化提案
+  if (currentParams.content_pattern && !currentParams.content_pattern.includes('\\b')) {
+    suggestions.push("content_pattern を具体化 (例: '\\\\b" + currentParams.content_pattern + "\\\\b' で完全一致)");
   }
-  
-  return keywordArray;
+
+  return {
+    message: `${totalMatches}件中${DISPLAY_LIMIT}件を表示しています。より具体的な結果を得るには:`,
+    options: suggestions,
+    current_filters: {
+      directory: currentParams.directory || '',
+      file_pattern: currentParams.file_pattern,
+      content_pattern: currentParams.content_pattern,
+      extensions: currentParams.extensions
+    }
+  };
 }
 
 

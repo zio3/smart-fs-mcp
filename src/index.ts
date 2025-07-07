@@ -16,7 +16,6 @@ import { SafetyController } from './core/safety-controller.js';
 import { getSecurityController, SecurityControllerV2 } from './core/security-controller-v2.js';
 import { FileAnalyzer } from './core/file-analyzer.js';
 import { readFile } from './tools/read-file.js';
-import { readFileForce } from './tools/read-file-force.js';
 import { listDirectory } from './tools/list-directory.js';
 import { searchContent } from './tools/search-content.js';
 import { writeFile } from './tools/write-file.js';
@@ -28,11 +27,11 @@ import { mkdir } from './tools/mkdir.js';
 import { deleteFile } from './tools/delete-file.js';
 import { deleteDirectory } from './tools/delete-directory.js';
 import { moveDirectory } from './tools/move-directory.js';
+import { getDefaultExcludeDirs } from './tools/get-default-exclude-dirs.js';
 // Security wrapper imports removed - tools handle validation internally
 import { SAFETY_LIMITS } from './utils/constants.js';
 import type {
   ReadFileParams,
-  ReadFileForceParams,
   EnhancedListDirectoryParams,
   SearchContentParams,
   WriteFileParams,
@@ -52,6 +51,9 @@ import type {
 import type {
   MoveDirectoryParams
 } from './tools/move-directory.js';
+import type {
+  GetDefaultExcludeDirsParams
+} from './tools/get-default-exclude-dirs.js';
 
 /**
  * Smart Filesystem MCP Server
@@ -91,13 +93,21 @@ class SmartFilesystemMCP {
       tools: [
         {
           name: 'read_file',
-          description: 'Read file contents - returns content directly or detailed error info if limits exceeded',
+          description: 'Read file contents - returns content directly or detailed error info if limits exceeded. Supports partial reads with line ranges.',
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
                 description: 'File path to read',
+              },
+              start_line: {
+                type: 'number',
+                description: 'Start line number (1-based, inclusive)',
+              },
+              end_line: {
+                type: 'number',
+                description: 'End line number (1-based, inclusive)',
               },
               encoding: {
                 type: 'string',
@@ -106,35 +116,6 @@ class SmartFilesystemMCP {
               },
             },
             required: ['path'],
-          },
-        },
-        {
-          name: 'read_file_force',
-          description: 'Force read file that exceeds normal limits (requires risk acknowledgment)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: {
-                type: 'string',
-                description: 'File path to read',
-              },
-              max_size_mb: {
-                type: 'number',
-                description: 'Maximum size in MB to allow (default: 50, max: 50)',
-                minimum: 1,
-                maximum: 50,
-              },
-              acknowledge_risk: {
-                type: 'boolean',
-                description: 'Must be true to force read large files',
-              },
-              encoding: {
-                type: 'string',
-                enum: ['utf8', 'utf16le', 'utf16be', 'latin1', 'ascii'],
-                description: 'Text encoding (default: utf8)',
-              },
-            },
-            required: ['path', 'acknowledge_risk'],
           },
         },
         {
@@ -437,6 +418,19 @@ class SmartFilesystemMCP {
             required: ['source', 'destination'],
           },
         },
+        {
+          name: 'get_default_exclude_dirs',
+          description: 'Get the default exclude directories for search operations',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              userDefaultExcludeDirs: {
+                type: 'boolean',
+                description: 'Use user-friendly default exclude directories (default: true)',
+              },
+            },
+          },
+        },
       ],
     }));
 
@@ -449,8 +443,6 @@ class SmartFilesystemMCP {
           case 'read_file':
             return await this.handleReadFile(args as unknown as ReadFileParams);
 
-          case 'read_file_force':
-            return await this.handleReadFileForce(args as unknown as ReadFileForceParams);
 
           case 'list_directory':
             return await this.handleListDirectory(args as unknown as EnhancedListDirectoryParams);
@@ -484,6 +476,9 @@ class SmartFilesystemMCP {
 
           case 'move_directory':
             return await this.handleMoveDirectory(args as unknown as MoveDirectoryParams);
+
+          case 'get_default_exclude_dirs':
+            return await this.handleGetDefaultExcludeDirs(args as unknown as GetDefaultExcludeDirsParams);
 
           default:
             throw new McpError(
@@ -538,20 +533,6 @@ class SmartFilesystemMCP {
     };
   }
 
-  /**
-   * Handle read_file_force tool
-   */
-  private async handleReadFileForce(params: ReadFileForceParams): Promise<{ content: any[] }> {
-    // Remove parameter validation - let tool handle it
-    const result = await readFileForce(params, this.safety, this.analyzer);
-
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(result, null, 2)
-      }]
-    };
-  }
 
   /**
    * Handle list_directory tool (LLM-optimized)
@@ -709,6 +690,20 @@ class SmartFilesystemMCP {
   private async handleMoveDirectory(params: MoveDirectoryParams): Promise<{ content: any[] }> {
     // Remove parameter validation - let tool handle it
     const result = await moveDirectory(params);
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
+  }
+
+  /**
+   * Handle get_default_exclude_dirs tool
+   */
+  private async handleGetDefaultExcludeDirs(params: GetDefaultExcludeDirsParams): Promise<{ content: any[] }> {
+    const result = await getDefaultExcludeDirs(params);
 
     return {
       content: [{

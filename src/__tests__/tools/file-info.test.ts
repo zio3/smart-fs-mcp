@@ -28,9 +28,9 @@ describe('fileInfo tool', () => {
     if (result.success) {
       expect(result.exists).toBe(true);
       expect(result.type).toBe('file');
-      expect(result.size).toBe(11); // "hello world".length
-      expect(result.is_binary).toBe(false);
-      expect(result.modified).toBeDefined();
+      expect(result.file_info.size_bytes).toBe(11); // "hello world".length
+      expect(result.file_info.is_binary).toBe(false);
+      expect(result.file_info.modified).toBeDefined();
     }
   });
 
@@ -44,9 +44,9 @@ describe('fileInfo tool', () => {
     if (result.success) {
       expect(result.exists).toBe(true);
       expect(result.type).toBe('directory');
-      expect(result.size).toBeDefined(); // Size of directory can vary
-      expect(result.is_binary).toBe(false); // Directories are not binary
-      expect(result.modified).toBeDefined();
+      expect(result.file_info.size_bytes).toBeDefined(); // Size of directory can vary
+      expect(result.file_info.is_binary).toBe(false); // Directories are not binary
+      expect(result.file_info.modified).toBeDefined();
     }
   });
 
@@ -90,7 +90,7 @@ describe('fileInfo tool', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.is_binary).toBe(true);
+      expect(result.file_info.is_binary).toBe(true);
     }
   });
 
@@ -102,7 +102,7 @@ describe('fileInfo tool', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.is_binary).toBe(true);
+      expect(result.file_info.is_binary).toBe(true);
     }
   });
 
@@ -114,7 +114,7 @@ describe('fileInfo tool', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.is_binary).toBe(false);
+      expect(result.file_info.is_binary).toBe(false);
     }
   });
 });

@@ -100,8 +100,7 @@ This is useful for testing the tools before using them in Claude Desktop.
 ## 🔧 Available Tools
 
 ### File Operations
-- `read_file` - Read files with automatic size handling
-- `read_file_force` - Force read large files (up to 50MB)
+- `read_file` - Read files with automatic size handling and partial read support (line ranges)
 - `write_file` - Write content with parent directory creation
 - `edit_file` - Smart text replacement or regex editing
 - `move_file` - Move, rename, or backup files
@@ -122,7 +121,7 @@ This is useful for testing the tools before using them in Claude Desktop.
 
 - **Sandboxed Access**: Only explicitly allowed directories are accessible
 - **Path Traversal Protection**: Blocks `../` and other escape attempts
-- **Size Limits**: 1MB default, 50MB force-read maximum
+- **Size Limits**: 20KB default for read operations
 - **Critical File Detection**: Warnings for important files (package.json, .env, etc.)
 - **Dry-Run Previews**: Preview deletions before execution
 

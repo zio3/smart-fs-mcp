@@ -4,10 +4,10 @@
  */
 
 import * as fs from 'fs/promises';
-import type { Stats } from 'fs';
-import * as path from 'path';
 import { getSecurityController } from '../core/security-controller-v2.js';
+import { FileAnalyzer } from '../core/file-analyzer.js';
 import { createUnifiedError, createUnifiedErrorFromException, ErrorCodes, UnifiedError, validatePath } from '../utils/unified-error-handler.js';
+import type { StandardFileInfo } from '../core/types.js';
 
 /**
  * file_infoパラメータ
@@ -17,15 +17,15 @@ export interface FileInfoParams {
 }
 
 /**
- * 成功レスポンス形式 (軽量版)
+ * 成功レスポンス形式 (統一版)
  */
 interface FileInfoSuccess {
   success: true;
+  path: string;
+  resolved_path: string;
   exists: boolean;
-  type: 'file' | 'directory' | 'unknown';
-  size: number;
-  is_binary: boolean;
-  modified: string;
+  type: 'file' | 'directory' | 'symlink' | 'other';
+  file_info: StandardFileInfo;
 }
 
 /**
@@ -33,84 +33,15 @@ interface FileInfoSuccess {
  */
 export type FileInfoUnifiedResponse = FileInfoSuccess | UnifiedError;
 
-/**
- * バイナリファイルの拡張子リスト
- */
-const BINARY_EXTENSIONS = new Set([
-  // 画像
-  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.webp', '.svg', '.tiff', '.heic',
-  // 動画
-  '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv', '.webm', '.m4v', '.mpg', '.mpeg',
-  // 音声
-  '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus',
-  // アーカイブ
-  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz', '.z',
-  // 実行ファイル
-  '.exe', '.dll', '.so', '.dylib', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.msi',
-  // ドキュメント
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
-  // その他バイナリ
-  '.bin', '.dat', '.db', '.sqlite', '.class', '.pyc', '.pyo', '.wasm', '.o'
-]);
+// バイナリ判定機能はFileAnalyzerに移行しました
 
 /**
- * 高速バイナリ判定
- * 拡張子ベースで判定し、不明な場合のみファイル内容をチェック
+ * ファイル情報を取得（統一版）
  */
-async function isBinaryFile(filePath: string, stats: Stats): Promise<boolean> {
-  const ext = path.extname(filePath).toLowerCase();
-  
-  // 拡張子で判定
-  if (BINARY_EXTENSIONS.has(ext)) {
-    return true;
-  }
-  
-  // テキストファイルの拡張子
-  const textExtensions = [
-    '.txt', '.md', '.js', '.ts', '.jsx', '.tsx', '.json', '.xml', '.html', '.css',
-    '.py', '.rb', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.php',
-    '.yaml', '.yml', '.toml', '.ini', '.conf', '.sh', '.bash', '.ps1', '.bat',
-    '.sql', '.r', '.m', '.lua', '.pl', '.swift', '.kt', '.scala', '.clj', '.elm'
-  ];
-  
-  if (textExtensions.includes(ext)) {
-    return false;
-  }
-  
-  // 拡張子が不明な場合、ファイルの先頭部分をチェック
-  if (stats.size === 0) {
-    return false; // 空ファイルはテキスト扱い
-  }
-  
-  try {
-    // 最初の512バイトのみ読み取り
-    const handle = await fs.open(filePath, 'r');
-    try {
-      const buffer = Buffer.alloc(Math.min(512, stats.size));
-      await handle.read(buffer, 0, buffer.length, 0);
-      
-      // NULL文字や制御文字の存在でバイナリ判定
-      for (let i = 0; i < buffer.length; i++) {
-        const byte = buffer[i];
-        // NULL文字または印刷不可能な制御文字（改行、タブ、キャリッジリターンを除く）
-        if (byte !== undefined && (byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13))) {
-          return true;
-        }
-      }
-      return false;
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    // 読み取りエラーの場合は安全側に倒してバイナリ扱い
-    return true;
-  }
-}
-
-/**
- * ファイル情報を取得（軽量版）
- */
-export async function fileInfo(params: FileInfoParams): Promise<FileInfoUnifiedResponse> {
+export async function fileInfo(
+  params: FileInfoParams,
+  analyzer: FileAnalyzer = new FileAnalyzer()
+): Promise<FileInfoUnifiedResponse> {
   const { path: targetPath } = params;
   
   // パスバリデーション
@@ -153,29 +84,54 @@ export async function fileInfo(params: FileInfoParams): Promise<FileInfoUnifiedR
     const stats = await fs.stat(resolvedPath);
     
     // タイプ判定
-    let type: 'file' | 'directory' | 'unknown';
+    let type: 'file' | 'directory' | 'symlink' | 'other';
     if (stats.isDirectory()) {
       type = 'directory';
     } else if (stats.isFile()) {
       type = 'file';
+    } else if (stats.isSymbolicLink()) {
+      type = 'symlink';
     } else {
-      type = 'unknown';
+      type = 'other';
     }
     
-    // バイナリ判定（ファイルの場合のみ）
-    let isBinary = false;
+    // ファイルの場合は統一ファイル情報を生成
     if (type === 'file') {
-      isBinary = await isBinaryFile(resolvedPath, stats);
+      const standardFileInfo = await analyzer.generateStandardFileInfo(resolvedPath, stats);
+      
+      return {
+        success: true,
+        path: targetPath,
+        resolved_path: resolvedPath,
+        exists: true,
+        type,
+        file_info: standardFileInfo
+      };
     }
     
-    // 軽量レスポンス
+    // ディレクトリやその他の場合は簡易情報
+    const simpleFileInfo: StandardFileInfo = {
+      size_bytes: stats.size,
+      is_binary: false,
+      file_type: 'binary',
+      modified: stats.mtime.toISOString(),
+      created: stats.birthtime.toISOString(),
+      accessed: stats.atime.toISOString(),
+      permissions: {
+        readable: !!(stats.mode & 0o444),
+        writable: !!(stats.mode & 0o222),
+        executable: !!(stats.mode & 0o111),
+        mode: '0' + (stats.mode & parseInt('777', 8)).toString(8)
+      }
+    };
+    
     return {
       success: true,
+      path: targetPath,
+      resolved_path: resolvedPath,
       exists: true,
       type,
-      size: stats.size,
-      is_binary: isBinary,
-      modified: stats.mtime.toISOString()
+      file_info: simpleFileInfo
     };
     
   } catch (error) {
