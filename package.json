@@ -1,6 +1,6 @@
 {
   "name": "@zio3/smart-fs-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Model Context Protocol (MCP) server for LLM-optimized filesystem operations with safety controls. For use with Claude Desktop.",
   "main": "dist/index.js",
   "type": "module",
